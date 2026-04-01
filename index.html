@@ -64,6 +64,40 @@
     height: calc(100vh - 65px);
   }
 
+  @media (max-width: 700px) {
+    header {
+      padding: 14px 16px 10px;
+    }
+    header h1 { font-size: 1.2rem; }
+
+    .layout {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto 1fr;
+      height: auto;
+    }
+
+    .canvas-area {
+      padding: 12px;
+      height: 60vw;
+      min-height: 240px;
+      max-height: 400px;
+    }
+
+    .side-panel {
+      border-left: none;
+      border-top: 1px solid var(--border);
+      overflow-y: visible;
+    }
+
+    .palette-grid {
+      grid-template-columns: repeat(5, 1fr);
+    }
+
+    .match-result {
+      gap: 8px;
+    }
+  }
+
   /* CANVAS AREA */
   .canvas-area {
     padding: 24px;
@@ -863,6 +897,41 @@ uploadZone.addEventListener('mousemove', e => {
 });
 
 uploadZone.addEventListener('mouseleave', () => {
+  crosshair.style.display = 'none';
+  sampleSwatch.style.display = 'none';
+});
+
+// ─── TOUCH SUPPORT ────────────────────────────────────────────────────────────
+function handleTouch(e) {
+  if (!uploadZone.classList.contains('has-image')) return;
+  e.preventDefault();
+  const touch = e.touches[0];
+  const rect = uploadZone.getBoundingClientRect();
+  const imgRect = displayImg.getBoundingClientRect();
+  const mx = touch.clientX - imgRect.left;
+  const my = touch.clientY - imgRect.top;
+  if (mx < 0 || my < 0 || mx > imgRect.width || my > imgRect.height) return;
+  const scaleX = canvasEl.width / imgRect.width;
+  const scaleY = canvasEl.height / imgRect.height;
+  const px = Math.floor(mx * scaleX);
+  const py = Math.floor(my * scaleY);
+  const pixel = ctx.getImageData(px, py, 1, 1).data;
+  const r = pixel[0], g = pixel[1], b = pixel[2];
+  const zx = touch.clientX - rect.left;
+  const zy = touch.clientY - rect.top;
+  crosshair.style.display = 'block';
+  crosshair.style.left = zx + 'px';
+  crosshair.style.top = zy + 'px';
+  sampleSwatch.style.display = 'block';
+  sampleSwatch.style.background = `rgb(${r},${g},${b})`;
+  sampleSwatch.style.left = zx + 'px';
+  sampleSwatch.style.top = zy + 'px';
+  updatePanel(r, g, b);
+}
+
+uploadZone.addEventListener('touchmove', handleTouch, { passive: false });
+uploadZone.addEventListener('touchstart', handleTouch, { passive: false });
+uploadZone.addEventListener('touchend', () => {
   crosshair.style.display = 'none';
   sampleSwatch.style.display = 'none';
 });
