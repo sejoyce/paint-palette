@@ -1,0 +1,964 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painter's Eye — Color Mixer</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=DM+Mono:wght@300;400&display=swap');
+
+  :root {
+    --ink: #1a1208;
+    --parchment: #f5efe4;
+    --warm-mid: #c9b99a;
+    --accent: #8b4513;
+    --gold: #c8962e;
+    --panel-bg: #fffdf8;
+    --border: #d4c4a8;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--parchment);
+    color: var(--ink);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(ellipse at 20% 10%, rgba(200,150,46,0.08) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 90%, rgba(139,69,19,0.07) 0%, transparent 50%);
+  }
+
+  header {
+    padding: 24px 32px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    background: rgba(255,253,248,0.8);
+    backdrop-filter: blur(8px);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  header h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+
+  header span {
+    font-size: 0.7rem;
+    color: var(--warm-mid);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 0;
+    height: calc(100vh - 65px);
+  }
+
+  /* CANVAS AREA */
+  .canvas-area {
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    overflow: hidden;
+  }
+
+  .upload-zone {
+    border: 2px dashed var(--border);
+    border-radius: 4px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    position: relative;
+    overflow: hidden;
+    background: rgba(255,253,248,0.5);
+  }
+
+  .upload-zone:hover { border-color: var(--gold); background: rgba(200,150,46,0.04); }
+  .upload-zone.has-image { border-style: solid; border-color: var(--border); cursor: crosshair; }
+
+  .upload-prompt {
+    text-align: center;
+    pointer-events: none;
+  }
+
+  .upload-prompt .icon {
+    font-size: 3rem;
+    margin-bottom: 12px;
+    opacity: 0.4;
+  }
+
+  .upload-prompt p {
+    font-size: 0.78rem;
+    color: var(--warm-mid);
+    line-height: 1.6;
+  }
+
+  .upload-prompt strong {
+    display: block;
+    font-family: 'Playfair Display', serif;
+    font-size: 1.1rem;
+    color: var(--ink);
+    margin-bottom: 6px;
+  }
+
+  #canvas-display {
+    display: none;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 2px;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  #hidden-canvas { display: none; }
+
+  .hover-crosshair {
+    display: none;
+    position: absolute;
+    width: 24px;
+    height: 24px;
+    border: 2px solid white;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(0,0,0,0.2);
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    mix-blend-mode: difference;
+  }
+
+  .sample-swatch {
+    display: none;
+    position: absolute;
+    width: 48px;
+    height: 48px;
+    border: 2px solid white;
+    border-radius: 3px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+    pointer-events: none;
+    transform: translate(16px, -56px);
+  }
+
+  #file-input { display: none; }
+
+  /* SIDE PANEL */
+  .side-panel {
+    border-left: 1px solid var(--border);
+    background: var(--panel-bg);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .panel-section {
+    padding: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-label {
+    font-size: 0.62rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--warm-mid);
+    margin-bottom: 14px;
+  }
+
+  /* SAMPLED COLOR */
+  .sampled-display {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  #sampled-swatch {
+    width: 52px;
+    height: 52px;
+    border-radius: 3px;
+    background: #ccc;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
+  }
+
+  .sampled-vals {
+    flex: 1;
+  }
+
+  .sampled-vals .hex {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.95rem;
+    color: var(--ink);
+    margin-bottom: 3px;
+  }
+
+  .sampled-vals .rgb {
+    font-size: 0.68rem;
+    color: var(--warm-mid);
+  }
+
+  /* MATCH RESULT */
+  .match-result {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .match-card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+  }
+
+  .match-card.best {
+    border-color: var(--gold);
+    background: rgba(200,150,46,0.04);
+  }
+
+  .match-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .match-tag {
+    font-size: 0.6rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--gold);
+  }
+
+  .match-score {
+    font-size: 0.65rem;
+    color: var(--warm-mid);
+  }
+
+  .mix-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .mix-swatch {
+    width: 22px;
+    height: 22px;
+    border-radius: 2px;
+    border: 1px solid rgba(0,0,0,0.12);
+    flex-shrink: 0;
+  }
+
+  .mix-name {
+    font-size: 0.72rem;
+    flex: 1;
+    color: var(--ink);
+  }
+
+  .mix-ratio {
+    font-size: 0.68rem;
+    color: var(--accent);
+    font-weight: 400;
+    min-width: 32px;
+    text-align: right;
+  }
+
+  .mix-bar-wrap {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-bottom: 10px;
+    display: flex;
+    overflow: hidden;
+    gap: 1px;
+  }
+
+  .mix-bar-seg {
+    height: 100%;
+    transition: width 0.3s ease;
+  }
+
+  .result-preview {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+
+  .result-preview-swatch {
+    width: 32px;
+    height: 22px;
+    border-radius: 2px;
+    border: 1px solid var(--border);
+  }
+
+  .result-preview-label {
+    font-size: 0.65rem;
+    color: var(--warm-mid);
+  }
+
+  .idle-msg {
+    font-size: 0.75rem;
+    color: var(--warm-mid);
+    font-style: italic;
+    line-height: 1.7;
+    text-align: center;
+    padding: 12px 0;
+    font-family: 'Playfair Display', serif;
+  }
+
+  /* PALETTE */
+  .palette-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+
+  .palette-chip {
+    aspect-ratio: 1;
+    border-radius: 3px;
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: transform 0.15s, border-color 0.15s;
+    position: relative;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+  }
+
+  .palette-chip:hover { transform: scale(1.08); }
+  .palette-chip.selected { border-color: var(--ink) !important; }
+
+  .palette-chip-name {
+    position: absolute;
+    bottom: 4px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 0.44rem;
+    white-space: normal;
+    word-break: break-word;
+    line-height: 1.3;
+    padding: 0 3px;
+    color: white;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8), 0 0 4px rgba(0,0,0,0.6);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
+
+  .palette-wrap {
+    padding-bottom: 20px;
+  }
+
+  /* COLOR EDIT MODAL */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(26,18,8,0.6);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 24px;
+    width: 280px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.2);
+  }
+
+  .modal h3 {
+    font-family: 'Playfair Display', serif;
+    margin-bottom: 16px;
+    font-size: 1rem;
+  }
+
+  .modal label {
+    display: block;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--warm-mid);
+    margin-bottom: 4px;
+  }
+
+  .modal input[type=text] {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.82rem;
+    margin-bottom: 12px;
+    background: white;
+    color: var(--ink);
+  }
+
+  .modal input[type=color] {
+    width: 100%;
+    height: 44px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+    margin-bottom: 16px;
+    padding: 2px;
+    background: white;
+  }
+
+  .modal-btns {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .btn {
+    padding: 7px 16px;
+    border-radius: 3px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.72rem;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: white;
+    color: var(--ink);
+    transition: background 0.15s;
+  }
+
+  .btn:hover { background: var(--parchment); }
+
+  .btn.primary {
+    background: var(--ink);
+    color: var(--parchment);
+    border-color: var(--ink);
+  }
+
+  .btn.primary:hover { background: var(--accent); border-color: var(--accent); }
+
+  .edit-hint {
+    font-size: 0.62rem;
+    color: var(--warm-mid);
+    margin-top: 10px;
+    text-align: center;
+  }
+
+  .add-color-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    margin-top: 14px;
+    padding: 8px;
+    border: 1px dashed var(--border);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--warm-mid);
+    font-family: 'DM Mono', monospace;
+    font-size: 0.68rem;
+    cursor: pointer;
+    letter-spacing: 0.08em;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+
+  .add-color-btn:hover {
+    border-color: var(--gold);
+    color: var(--ink);
+    background: rgba(200,150,46,0.04);
+  }
+
+  .modal-delete-btn {
+    padding: 7px 16px;
+    border-radius: 3px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.72rem;
+    cursor: pointer;
+    border: 1px solid #e8c4c4;
+    background: #fdf5f5;
+    color: #a03030;
+    transition: background 0.15s;
+    margin-right: auto;
+  }
+
+  .modal-delete-btn:hover { background: #f9e5e5; }
+
+  .palette-chip-delete {
+    display: none;
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    width: 16px;
+    height: 16px;
+    background: #a03030;
+    color: white;
+    border-radius: 50%;
+    font-size: 10px;
+    line-height: 16px;
+    text-align: center;
+    cursor: pointer;
+    z-index: 10;
+    font-style: normal;
+  }
+
+  .palette-chip:hover .palette-chip-delete { display: block; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Painter's Eye</h1>
+  <span>Oil Color Mixer</span>
+</header>
+
+<div class="layout">
+  <div class="canvas-area">
+    <div class="upload-zone" id="upload-zone">
+      <div class="upload-prompt" id="upload-prompt">
+        <div class="icon">🖼</div>
+        <strong>Drop your reference photo here</strong>
+        <p>or click to browse<br><br>Hover over any pixel to identify<br>the closest oil paint mix</p>
+      </div>
+      <img id="canvas-display" alt="Reference photo" draggable="false" />
+      <canvas id="hidden-canvas"></canvas>
+      <div class="hover-crosshair" id="crosshair"></div>
+      <div class="sample-swatch" id="sample-swatch"></div>
+    </div>
+    <input type="file" id="file-input" accept="image/*" />
+  </div>
+
+  <div class="side-panel">
+    <div class="panel-section">
+      <div class="section-label">Sampled Pixel</div>
+      <div class="sampled-display">
+        <div id="sampled-swatch"></div>
+        <div class="sampled-vals">
+          <div class="hex" id="hex-val">—</div>
+          <div class="rgb" id="rgb-val">hover over image</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-section" style="flex:1">
+      <div class="section-label">Closest Mix</div>
+      <div class="match-result" id="match-result">
+        <p class="idle-msg">Upload a photo and hover<br>over any area to find<br>your paint mix.</p>
+      </div>
+    </div>
+
+    <div class="panel-section palette-wrap">
+      <div class="section-label">Your Palette</div>
+      <div class="palette-grid" id="palette-grid"></div>
+      <button class="add-color-btn" onclick="openAddModal()">+ Add Color</button>
+      <p class="edit-hint">Click a swatch to edit · hover corner to delete</p>
+    </div>
+  </div>
+</div>
+
+<!-- Edit modal -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <h3 id="modal-title">Edit Paint Color</h3>
+    <label>Color Name</label>
+    <input type="text" id="edit-name" placeholder="e.g. Titanium White" />
+    <label>Color Value</label>
+    <input type="color" id="edit-color" />
+    <div class="modal-btns">
+      <button class="modal-delete-btn" id="delete-btn" onclick="deleteColor()" style="display:none">Delete</button>
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn primary" onclick="saveColor()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── PALETTE ────────────────────────────────────────────────────────────────
+let palette = [
+  { name: "Cadmium Red Hue",           hex: "#d03020" },
+  { name: "Perm. Alizarin Crimson",    hex: "#8b1a2a" },
+  { name: "Cadmium Yellow",            hex: "#f5c800" },
+  { name: "Viridian Hue",              hex: "#3d9970" },
+  { name: "Cerulean Blue Hue",         hex: "#3a7fbf" },
+  { name: "French Ultramarine",        hex: "#1a2e8b" },
+  { name: "Burnt Sienna",              hex: "#8b4513" },
+  { name: "Burnt Umber",               hex: "#5c3010" },
+  { name: "Titanium White",            hex: "#f2f0e8" },
+];
+
+let editingIndex = null;
+
+function hexToRgb(hex) {
+  hex = hex.replace('#','');
+  if (hex.length === 3) hex = hex.split('').map(c=>c+c).join('');
+  return {
+    r: parseInt(hex.slice(0,2),16),
+    g: parseInt(hex.slice(2,4),16),
+    b: parseInt(hex.slice(4,6),16)
+  };
+}
+
+function rgbToHex(r,g,b) {
+  return '#' + [r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
+}
+
+// sRGB → linear
+function toLinear(c) {
+  c /= 255;
+  return c <= 0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4);
+}
+
+// RGB → XYZ (D65)
+function rgbToXyz(r,g,b) {
+  const rl = toLinear(r), gl = toLinear(g), bl = toLinear(b);
+  return {
+    x: rl*0.4124564 + gl*0.3575761 + bl*0.1804375,
+    y: rl*0.2126729 + gl*0.7151522 + bl*0.0721750,
+    z: rl*0.0193339 + gl*0.1191920 + bl*0.9503041,
+  };
+}
+
+// XYZ → Lab
+function xyzToLab({x,y,z}) {
+  const Xn=0.95047, Yn=1.0, Zn=1.08883;
+  function f(t) { return t>0.008856 ? Math.cbrt(t) : 7.787*t+16/116; }
+  return {
+    L: 116*f(y/Yn)-16,
+    a: 500*(f(x/Xn)-f(y/Yn)),
+    b: 200*(f(y/Yn)-f(z/Zn))
+  };
+}
+
+function rgbToLab(r,g,b) { return xyzToLab(rgbToXyz(r,g,b)); }
+
+function deltaE(lab1, lab2) {
+  return Math.sqrt((lab1.L-lab2.L)**2 + (lab1.a-lab2.a)**2 + (lab1.b-lab2.b)**2);
+}
+
+// Mix two Lab colors at ratio t (0=pure A, 1=pure B) — in Lab space
+function mixLab(labA, labB, t) {
+  return { L: labA.L*(1-t)+labB.L*t, a: labA.a*(1-t)+labB.a*t, b: labA.b*(1-t)+labB.b*t };
+}
+
+// Lab → XYZ → RGB approx (for preview swatch)
+function labToRgb(lab) {
+  const Xn=0.95047, Yn=1.0, Zn=1.08883;
+  const fy = (lab.L+16)/116;
+  const fx = lab.a/500+fy;
+  const fz = fy-lab.b/200;
+  function inv(t) { return t>0.2069 ? t**3 : (t-16/116)/7.787; }
+  const x=inv(fx)*Xn, y=inv(fy)*Yn, z=inv(fz)*Zn;
+  let r =  x*3.2404542 - y*1.5371385 - z*0.4985314;
+  let g = -x*0.9692660 + y*1.8760108 + z*0.0415560;
+  let b =  x*0.0556434 - y*0.2040259 + z*1.0572252;
+  function fromLinear(c) { return c<=0.0031308 ? 12.92*c : 1.055*Math.pow(c,1/2.4)-0.055; }
+  r=fromLinear(r); g=fromLinear(g); b=fromLinear(b);
+  const clamp = v => Math.max(0,Math.min(1,v));
+  return { r: Math.round(clamp(r)*255), g: Math.round(clamp(g)*255), b: Math.round(clamp(b)*255) };
+}
+
+// Find the best 1-paint and best 2-paint mix
+function findBestMix(r, g, b) {
+  const targetLab = rgbToLab(r,g,b);
+  const paletteLabs = palette.map(p => { const c=hexToRgb(p.hex); return rgbToLab(c.r,c.g,c.b); });
+
+  // Best single
+  let bestSingle = { dE: Infinity, idx: 0 };
+  paletteLabs.forEach((lab,i) => {
+    const d = deltaE(targetLab, lab);
+    if (d < bestSingle.dE) bestSingle = { dE: d, idx: i };
+  });
+
+  // Best pair (search 20 ratio steps)
+  let bestPair = { dE: Infinity, idxA: 0, idxB: 1, ratio: 0.5 };
+  for (let i=0; i<palette.length; i++) {
+    for (let j=i+1; j<palette.length; j++) {
+      for (let t=0.05; t<=0.95; t+=0.05) {
+        const mixed = mixLab(paletteLabs[i], paletteLabs[j], t);
+        const d = deltaE(targetLab, mixed);
+        if (d < bestPair.dE) bestPair = { dE: d, idxA: i, idxB: j, ratio: t };
+      }
+    }
+  }
+
+  return { single: bestSingle, pair: bestPair, targetLab };
+}
+
+// ─── RENDER PALETTE ──────────────────────────────────────────────────────────
+function renderPalette() {
+  const grid = document.getElementById('palette-grid');
+  grid.innerHTML = '';
+  palette.forEach((p,i) => {
+    const chip = document.createElement('div');
+    chip.className = 'palette-chip';
+    chip.style.background = p.hex;
+    chip.title = p.name;
+    chip.innerHTML = `
+      <span class="palette-chip-name">${p.name}</span>
+      <i class="palette-chip-delete" title="Delete">×</i>
+    `;
+    chip.querySelector('.palette-chip-delete').addEventListener('click', e => {
+      e.stopPropagation();
+      if (palette.length <= 1) return;
+      palette.splice(i, 1);
+      renderPalette();
+    });
+    chip.addEventListener('click', () => openModal(i));
+    grid.appendChild(chip);
+  });
+}
+
+// ─── MODAL ───────────────────────────────────────────────────────────────────
+function openModal(i) {
+  editingIndex = i;
+  document.getElementById('modal-title').textContent = 'Edit Paint Color';
+  document.getElementById('edit-name').value = palette[i].name;
+  document.getElementById('edit-color').value = palette[i].hex;
+  document.getElementById('delete-btn').style.display = palette.length > 1 ? 'block' : 'none';
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function openAddModal() {
+  editingIndex = null;
+  document.getElementById('modal-title').textContent = 'Add Paint Color';
+  document.getElementById('edit-name').value = '';
+  document.getElementById('edit-color').value = '#888888';
+  document.getElementById('delete-btn').style.display = 'none';
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+  editingIndex = null;
+}
+
+function saveColor() {
+  const name = document.getElementById('edit-name').value.trim();
+  const hex = document.getElementById('edit-color').value;
+  if (!name) { document.getElementById('edit-name').focus(); return; }
+  if (editingIndex !== null) {
+    palette[editingIndex].name = name;
+    palette[editingIndex].hex = hex;
+  } else {
+    palette.push({ name, hex });
+  }
+  renderPalette();
+  closeModal();
+}
+
+function deleteColor() {
+  if (editingIndex === null || palette.length <= 1) return;
+  palette.splice(editingIndex, 1);
+  renderPalette();
+  closeModal();
+}
+
+document.getElementById('modal-overlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+
+// ─── IMAGE LOADING ────────────────────────────────────────────────────────────
+const uploadZone = document.getElementById('upload-zone');
+const fileInput = document.getElementById('file-input');
+const canvasEl = document.getElementById('hidden-canvas');
+const ctx = canvasEl.getContext('2d', { willReadFrequently: true });
+const displayImg = document.getElementById('canvas-display');
+const crosshair = document.getElementById('crosshair');
+const sampleSwatch = document.getElementById('sample-swatch');
+
+uploadZone.addEventListener('click', (e) => {
+  if (!uploadZone.classList.contains('has-image')) fileInput.click();
+});
+
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.style.borderColor = 'var(--gold)'; });
+uploadZone.addEventListener('dragleave', () => { uploadZone.style.borderColor = ''; });
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.style.borderColor = '';
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) loadImage(file);
+});
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) loadImage(fileInput.files[0]);
+});
+
+function loadImage(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const url = e.target.result;
+    const img = new Image();
+    img.onload = () => {
+      canvasEl.width = img.naturalWidth;
+      canvasEl.height = img.naturalHeight;
+      ctx.drawImage(img, 0, 0);
+      displayImg.src = url;
+      displayImg.style.display = 'block';
+      document.getElementById('upload-prompt').style.display = 'none';
+      uploadZone.classList.add('has-image');
+      uploadZone.style.cursor = 'crosshair';
+    };
+    img.src = url;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ─── HOVER SAMPLING ───────────────────────────────────────────────────────────
+uploadZone.addEventListener('mousemove', e => {
+  if (!uploadZone.classList.contains('has-image')) return;
+
+  const rect = uploadZone.getBoundingClientRect();
+  const imgRect = displayImg.getBoundingClientRect();
+
+  // Position relative to image
+  const mx = e.clientX - imgRect.left;
+  const my = e.clientY - imgRect.top;
+
+  if (mx < 0 || my < 0 || mx > imgRect.width || my > imgRect.height) {
+    crosshair.style.display = 'none';
+    sampleSwatch.style.display = 'none';
+    return;
+  }
+
+  // Map to canvas coords
+  const scaleX = canvasEl.width / imgRect.width;
+  const scaleY = canvasEl.height / imgRect.height;
+  const px = Math.floor(mx * scaleX);
+  const py = Math.floor(my * scaleY);
+
+  const pixel = ctx.getImageData(px, py, 1, 1).data;
+  const r = pixel[0], g = pixel[1], b = pixel[2];
+
+  // Position crosshair (relative to upload-zone)
+  const zx = e.clientX - rect.left;
+  const zy = e.clientY - rect.top;
+
+  crosshair.style.display = 'block';
+  crosshair.style.left = zx + 'px';
+  crosshair.style.top = zy + 'px';
+
+  // Sample swatch offset (avoid going off-screen)
+  sampleSwatch.style.display = 'block';
+  sampleSwatch.style.background = `rgb(${r},${g},${b})`;
+  sampleSwatch.style.left = zx + 'px';
+  sampleSwatch.style.top = zy + 'px';
+
+  updatePanel(r, g, b);
+});
+
+uploadZone.addEventListener('mouseleave', () => {
+  crosshair.style.display = 'none';
+  sampleSwatch.style.display = 'none';
+});
+
+// ─── PANEL UPDATE ─────────────────────────────────────────────────────────────
+function updatePanel(r, g, b) {
+  const hex = rgbToHex(r,g,b);
+  document.getElementById('sampled-swatch').style.background = `rgb(${r},${g},${b})`;
+  document.getElementById('hex-val').textContent = hex.toUpperCase();
+  document.getElementById('rgb-val').textContent = `rgb(${r}, ${g}, ${b})`;
+
+  const { single, pair } = findBestMix(r, g, b);
+
+  const mr = document.getElementById('match-result');
+  mr.innerHTML = '';
+
+  // === BEST SINGLE PAINT ===
+  const singleCard = document.createElement('div');
+  singleCard.className = 'match-card' + (single.dE <= pair.dE ? ' best' : '');
+  const sc = hexToRgb(palette[single.idx].hex);
+  const singlePreviewRgb = { r: sc.r, g: sc.g, b: sc.b };
+
+  singleCard.innerHTML = `
+    <div class="match-header">
+      <span class="match-tag">${single.dE <= pair.dE ? '★ Best Match' : 'Single Paint'}</span>
+      <span class="match-score">ΔE ${single.dE.toFixed(1)}</span>
+    </div>
+    <div class="mix-row">
+      <div class="mix-swatch" style="background:${palette[single.idx].hex}"></div>
+      <div class="mix-name">${palette[single.idx].name}</div>
+      <div class="mix-ratio">100%</div>
+    </div>
+    <div class="mix-bar-wrap">
+      <div class="mix-bar-seg" style="width:100%;background:${palette[single.idx].hex}"></div>
+    </div>
+    <div class="result-preview">
+      <div class="result-preview-swatch" style="background:${palette[single.idx].hex}"></div>
+      <span class="result-preview-label">Use straight from tube</span>
+    </div>
+  `;
+  mr.appendChild(singleCard);
+
+  // === BEST 2-PAINT MIX ===
+  const pairCard = document.createElement('div');
+  pairCard.className = 'match-card' + (pair.dE < single.dE ? ' best' : '');
+
+  const ratioA = Math.round((1 - pair.ratio) * 10);
+  const ratioB = 10 - ratioA;
+  const mixedLab = mixLab(
+    { ...rgbToLab(...Object.values(hexToRgb(palette[pair.idxA].hex))) },
+    { ...rgbToLab(...Object.values(hexToRgb(palette[pair.idxB].hex))) },
+    pair.ratio
+  );
+  const mixedRgbObj = labToRgb(mixedLab);
+  const mixPreviewHex = rgbToHex(mixedRgbObj.r, mixedRgbObj.g, mixedRgbObj.b);
+
+  pairCard.innerHTML = `
+    <div class="match-header">
+      <span class="match-tag">${pair.dE < single.dE ? '★ Best Match' : '2-Color Mix'}</span>
+      <span class="match-score">ΔE ${pair.dE.toFixed(1)}</span>
+    </div>
+    <div class="mix-row">
+      <div class="mix-swatch" style="background:${palette[pair.idxA].hex}"></div>
+      <div class="mix-name">${palette[pair.idxA].name}</div>
+      <div class="mix-ratio">${ratioA * 10}%</div>
+    </div>
+    <div class="mix-row">
+      <div class="mix-swatch" style="background:${palette[pair.idxB].hex}"></div>
+      <div class="mix-name">${palette[pair.idxB].name}</div>
+      <div class="mix-ratio">${ratioB * 10}%</div>
+    </div>
+    <div class="mix-bar-wrap">
+      <div class="mix-bar-seg" style="width:${ratioA*10}%;background:${palette[pair.idxA].hex}"></div>
+      <div class="mix-bar-seg" style="width:${ratioB*10}%;background:${palette[pair.idxB].hex}"></div>
+    </div>
+    <div class="result-preview">
+      <div class="result-preview-swatch" style="background:${mixPreviewHex}"></div>
+      <span class="result-preview-label">Mixed result preview</span>
+    </div>
+  `;
+  mr.appendChild(pairCard);
+
+  // ΔE guidance
+  const bestDE = Math.min(single.dE, pair.dE);
+  const guidance = document.createElement('p');
+  guidance.style.cssText = 'font-size:0.62rem;color:var(--warm-mid);text-align:center;line-height:1.6;margin-top:4px;';
+  guidance.textContent = bestDE < 5 ? '✓ Excellent match' : bestDE < 15 ? '~ Good match' : '△ Approximate — limited by palette';
+  mr.appendChild(guidance);
+}
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+function rgbToLab2(r,g,b) { return rgbToLab(r,g,b); } // alias
+renderPalette();
+
+// fix varargs call
+const _origRgbToLab = rgbToLab;
+</script>
+</body>
+</html>
