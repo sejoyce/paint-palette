@@ -708,9 +708,29 @@ function labToRgb(lab) {
 }
 
 // Find the best 1-paint and best 2-paint mix
+// 3-way Lab mix: wA + wB + wW = 1
+function mix3Lab(labA, labB, labW, wA, wB) {
+  const wW = 1 - wA - wB;
+  return {
+    L: labA.L*wA + labB.L*wB + labW.L*wW,
+    a: labA.a*wA + labB.a*wB + labW.a*wW,
+    b: labA.b*wA + labB.b*wB + labW.b*wW,
+  };
+}
+
 function findBestMix(r, g, b) {
   const targetLab = rgbToLab(r,g,b);
   const paletteLabs = palette.map(p => { const c=hexToRgb(p.hex); return rgbToLab(c.r,c.g,c.b); });
+
+  // Find white index (closest to pure white in palette)
+  const whiteLab = rgbToLab(242, 240, 232); // Titanium White reference
+  let whiteIdx = 0;
+  let whiteDE = Infinity;
+  paletteLabs.forEach((lab,i) => {
+    const d = deltaE(whiteLab, lab);
+    if (d < whiteDE) { whiteDE = d; whiteIdx = i; }
+  });
+  const wLab = paletteLabs[whiteIdx];
 
   // Best single
   let bestSingle = { dE: Infinity, idx: 0 };
@@ -719,19 +739,61 @@ function findBestMix(r, g, b) {
     if (d < bestSingle.dE) bestSingle = { dE: d, idx: i };
   });
 
-  // Best pair (search 20 ratio steps)
-  let bestPair = { dE: Infinity, idxA: 0, idxB: 1, ratio: 0.5 };
+  // Best 2-color mix (no white constraint — any two colors)
+  let bestPair = { dE: Infinity, idxA: 0, idxB: 1, ratio: 0.5, hasWhite: false, whiteRatio: 0 };
   for (let i=0; i<palette.length; i++) {
     for (let j=i+1; j<palette.length; j++) {
       for (let t=0.05; t<=0.95; t+=0.05) {
         const mixed = mixLab(paletteLabs[i], paletteLabs[j], t);
         const d = deltaE(targetLab, mixed);
-        if (d < bestPair.dE) bestPair = { dE: d, idxA: i, idxB: j, ratio: t };
+        if (d < bestPair.dE) bestPair = { dE: d, idxA: i, idxB: j, ratio: t, hasWhite: false, whiteRatio: 0 };
       }
     }
   }
 
-  return { single: bestSingle, pair: bestPair, targetLab };
+  // Best 2-color + white (color A + color B + white), exclude white-as-A or white-as-B
+  // wA = share of color A among non-white, wW = white portion of total
+  let bestTriple = { dE: Infinity, idxA: 0, idxB: 1, wA: 0.5, wB: 0.3, wW: 0.2, hasWhite: true };
+  for (let i=0; i<palette.length; i++) {
+    if (i === whiteIdx) continue;
+    for (let j=i+1; j<palette.length; j++) {
+      if (j === whiteIdx) continue;
+      // sweep white proportion 10%-70%, then split remainder between A and B
+      for (let wW=0.10; wW<=0.70; wW+=0.10) {
+        const rem = 1 - wW;
+        for (let t=0.05; t<=0.95; t+=0.05) {
+          const wA = rem * (1 - t);
+          const wB = rem * t;
+          const mixed = mix3Lab(paletteLabs[i], paletteLabs[j], wLab, wA, wB);
+          const d = deltaE(targetLab, mixed);
+          if (d < bestTriple.dE) bestTriple = { dE: d, idxA: i, idxB: j, wA, wB, wW, hasWhite: true, whiteIdx };
+        }
+      }
+    }
+  }
+
+  // Also try single color + white
+  let bestSingleWhite = { dE: Infinity, idx: 0, wC: 0.7, wW: 0.3, hasWhite: true, whiteIdx };
+  for (let i=0; i<palette.length; i++) {
+    if (i === whiteIdx) continue;
+    for (let wW=0.05; wW<=0.90; wW+=0.05) {
+      const wC = 1 - wW;
+      const mixed = mix3Lab(paletteLabs[i], wLab, wLab, wC, 0);
+      // simpler: just lerp color→white
+      const mixedSimple = mixLab(paletteLabs[i], wLab, wW);
+      const d = deltaE(targetLab, mixedSimple);
+      if (d < bestSingleWhite.dE) bestSingleWhite = { dE: d, idx: i, wC, wW: wW, hasWhite: true, whiteIdx };
+    }
+  }
+
+  // Pick best overall 2-or-3 component mix
+  // Options: bestPair (2 colors), bestSingleWhite (1 color + white), bestTriple (2 colors + white)
+  let bestComplex = bestPair;
+  if (bestSingleWhite.dE < bestComplex.dE) bestComplex = { ...bestSingleWhite, type: 'singleWhite' };
+  if (bestTriple.dE < bestComplex.dE) bestComplex = { ...bestTriple, type: 'triple' };
+  if (!bestComplex.type) bestComplex.type = 'pair';
+
+  return { single: bestSingle, complex: bestComplex, whiteIdx, targetLab };
 }
 
 // ─── RENDER PALETTE ──────────────────────────────────────────────────────────
@@ -937,85 +999,120 @@ uploadZone.addEventListener('touchend', () => {
 });
 
 // ─── PANEL UPDATE ─────────────────────────────────────────────────────────────
+function makePreviewHex(components) {
+  // components: [{labColor, weight}, ...]
+  const total = components.reduce((s,c) => s+c.weight, 0);
+  let L=0,a=0,b=0;
+  components.forEach(c => { L+=c.lab.L*c.weight/total; a+=c.lab.a*c.weight/total; b+=c.lab.b*c.weight/total; });
+  const rgb = labToRgb({L,a,b});
+  return rgbToHex(rgb.r,rgb.g,rgb.b);
+}
+
+function makeCard(isBest, tag, dE, rows, previewHex, note) {
+  const card = document.createElement('div');
+  card.className = 'match-card' + (isBest ? ' best' : '');
+  const barSegs = rows.map(row =>
+    `<div class="mix-bar-seg" style="width:${row.pct}%;background:${row.hex}"></div>`
+  ).join('');
+  const rowsHtml = rows.map(row => `
+    <div class="mix-row">
+      <div class="mix-swatch" style="background:${row.hex}"></div>
+      <div class="mix-name">${row.name}</div>
+      <div class="mix-ratio">${row.pct}%</div>
+    </div>`).join('');
+  card.innerHTML = `
+    <div class="match-header">
+      <span class="match-tag">${isBest ? '★ ' : ''}${tag}</span>
+      <span class="match-score">ΔE ${dE.toFixed(1)}</span>
+    </div>
+    ${rowsHtml}
+    <div class="mix-bar-wrap">${barSegs}</div>
+    <div class="result-preview">
+      <div class="result-preview-swatch" style="background:${previewHex}"></div>
+      <span class="result-preview-label">${note}</span>
+    </div>`;
+  return card;
+}
+
 function updatePanel(r, g, b) {
   const hex = rgbToHex(r,g,b);
   document.getElementById('sampled-swatch').style.background = `rgb(${r},${g},${b})`;
   document.getElementById('hex-val').textContent = hex.toUpperCase();
   document.getElementById('rgb-val').textContent = `rgb(${r}, ${g}, ${b})`;
 
-  const { single, pair } = findBestMix(r, g, b);
+  const { single, complex, whiteIdx } = findBestMix(r, g, b);
+  const paletteLabs = palette.map(p => { const c=hexToRgb(p.hex); return rgbToLab(c.r,c.g,c.b); });
 
   const mr = document.getElementById('match-result');
   mr.innerHTML = '';
 
-  // === BEST SINGLE PAINT ===
-  const singleCard = document.createElement('div');
-  singleCard.className = 'match-card' + (single.dE <= pair.dE ? ' best' : '');
-  const sc = hexToRgb(palette[single.idx].hex);
-  const singlePreviewRgb = { r: sc.r, g: sc.g, b: sc.b };
+  const complexIsBest = complex.dE < single.dE;
 
-  singleCard.innerHTML = `
-    <div class="match-header">
-      <span class="match-tag">${single.dE <= pair.dE ? '★ Best Match' : 'Single Paint'}</span>
-      <span class="match-score">ΔE ${single.dE.toFixed(1)}</span>
-    </div>
-    <div class="mix-row">
-      <div class="mix-swatch" style="background:${palette[single.idx].hex}"></div>
-      <div class="mix-name">${palette[single.idx].name}</div>
-      <div class="mix-ratio">100%</div>
-    </div>
-    <div class="mix-bar-wrap">
-      <div class="mix-bar-seg" style="width:100%;background:${palette[single.idx].hex}"></div>
-    </div>
-    <div class="result-preview">
-      <div class="result-preview-swatch" style="background:${palette[single.idx].hex}"></div>
-      <span class="result-preview-label">Use straight from tube</span>
-    </div>
-  `;
-  mr.appendChild(singleCard);
+  // === SINGLE PAINT CARD ===
+  const singlePreviewHex = palette[single.idx].hex;
+  mr.appendChild(makeCard(
+    !complexIsBest,
+    'Single Paint',
+    single.dE,
+    [{ hex: palette[single.idx].hex, name: palette[single.idx].name, pct: 100 }],
+    singlePreviewHex,
+    'Use straight from tube'
+  ));
 
-  // === BEST 2-PAINT MIX ===
-  const pairCard = document.createElement('div');
-  pairCard.className = 'match-card' + (pair.dE < single.dE ? ' best' : '');
+  // === COMPLEX MIX CARD ===
+  let rows = [], components = [], tag = '', note = '';
 
-  const ratioA = Math.round((1 - pair.ratio) * 10);
-  const ratioB = 10 - ratioA;
-  const mixedLab = mixLab(
-    { ...rgbToLab(...Object.values(hexToRgb(palette[pair.idxA].hex))) },
-    { ...rgbToLab(...Object.values(hexToRgb(palette[pair.idxB].hex))) },
-    pair.ratio
-  );
-  const mixedRgbObj = labToRgb(mixedLab);
-  const mixPreviewHex = rgbToHex(mixedRgbObj.r, mixedRgbObj.g, mixedRgbObj.b);
+  if (complex.type === 'pair') {
+    const pA = Math.round((1 - complex.ratio) * 100);
+    const pB = 100 - pA;
+    rows = [
+      { hex: palette[complex.idxA].hex, name: palette[complex.idxA].name, pct: pA },
+      { hex: palette[complex.idxB].hex, name: palette[complex.idxB].name, pct: pB },
+    ];
+    components = [
+      { lab: paletteLabs[complex.idxA], weight: pA },
+      { lab: paletteLabs[complex.idxB], weight: pB },
+    ];
+    tag = '2-Color Mix';
+    note = 'Mixed result preview';
 
-  pairCard.innerHTML = `
-    <div class="match-header">
-      <span class="match-tag">${pair.dE < single.dE ? '★ Best Match' : '2-Color Mix'}</span>
-      <span class="match-score">ΔE ${pair.dE.toFixed(1)}</span>
-    </div>
-    <div class="mix-row">
-      <div class="mix-swatch" style="background:${palette[pair.idxA].hex}"></div>
-      <div class="mix-name">${palette[pair.idxA].name}</div>
-      <div class="mix-ratio">${ratioA * 10}%</div>
-    </div>
-    <div class="mix-row">
-      <div class="mix-swatch" style="background:${palette[pair.idxB].hex}"></div>
-      <div class="mix-name">${palette[pair.idxB].name}</div>
-      <div class="mix-ratio">${ratioB * 10}%</div>
-    </div>
-    <div class="mix-bar-wrap">
-      <div class="mix-bar-seg" style="width:${ratioA*10}%;background:${palette[pair.idxA].hex}"></div>
-      <div class="mix-bar-seg" style="width:${ratioB*10}%;background:${palette[pair.idxB].hex}"></div>
-    </div>
-    <div class="result-preview">
-      <div class="result-preview-swatch" style="background:${mixPreviewHex}"></div>
-      <span class="result-preview-label">Mixed result preview</span>
-    </div>
-  `;
-  mr.appendChild(pairCard);
+  } else if (complex.type === 'singleWhite') {
+    const pC = Math.round(complex.wC * 100);
+    const pW = 100 - pC;
+    rows = [
+      { hex: palette[complex.idx].hex, name: palette[complex.idx].name, pct: pC },
+      { hex: palette[whiteIdx].hex, name: palette[whiteIdx].name, pct: pW },
+    ];
+    components = [
+      { lab: paletteLabs[complex.idx], weight: pC },
+      { lab: paletteLabs[whiteIdx], weight: pW },
+    ];
+    tag = 'Color + White';
+    note = 'Lightened with white';
+
+  } else if (complex.type === 'triple') {
+    const pA = Math.round(complex.wA * 100);
+    const pB = Math.round(complex.wB * 100);
+    const pW = 100 - pA - pB;
+    rows = [
+      { hex: palette[complex.idxA].hex, name: palette[complex.idxA].name, pct: pA },
+      { hex: palette[complex.idxB].hex, name: palette[complex.idxB].name, pct: pB },
+      { hex: palette[whiteIdx].hex, name: palette[whiteIdx].name, pct: pW },
+    ];
+    components = [
+      { lab: paletteLabs[complex.idxA], weight: pA },
+      { lab: paletteLabs[complex.idxB], weight: pB },
+      { lab: paletteLabs[whiteIdx], weight: pW },
+    ];
+    tag = '3-Color Mix';
+    note = 'Mixed result preview';
+  }
+
+  const previewHex = makePreviewHex(components);
+  mr.appendChild(makeCard(complexIsBest, tag, complex.dE, rows, previewHex, note));
 
   // ΔE guidance
-  const bestDE = Math.min(single.dE, pair.dE);
+  const bestDE = Math.min(single.dE, complex.dE);
   const guidance = document.createElement('p');
   guidance.style.cssText = 'font-size:0.62rem;color:var(--warm-mid);text-align:center;line-height:1.6;margin-top:4px;';
   guidance.textContent = bestDE < 5 ? '✓ Excellent match' : bestDE < 15 ? '~ Good match' : '△ Approximate — limited by palette';
