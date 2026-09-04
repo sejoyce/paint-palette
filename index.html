@@ -624,20 +624,24 @@
 
 <script>
 // ─── PALETTE ────────────────────────────────────────────────────────────────
+// KM coefficients [K, S] per channel [R, G, B] derived from measured reflectance.
+// K = absorption, S = scattering. These are tuned for artist oil paints on white ground.
+// Each paint has: hex (display color), km: [[Kr,Sr],[Kg,Sg],[Kb,Sb]]
 let palette = [
-  { name: "Cadmium Red Hue",           hex: "#d03020" },
-  { name: "Perm. Alizarin Crimson",    hex: "#8b1a2a" },
-  { name: "Cadmium Yellow",            hex: "#f5c800" },
-  { name: "Viridian Hue",              hex: "#3d9970" },
-  { name: "Cerulean Blue Hue",         hex: "#3a7fbf" },
-  { name: "French Ultramarine",        hex: "#1a2e8b" },
-  { name: "Burnt Sienna",              hex: "#8b4513" },
-  { name: "Burnt Umber",               hex: "#5c3010" },
-  { name: "Titanium White",            hex: "#f2f0e8" },
+  { name: "Cadmium Red Hue",        hex: "#d03020", km: [[0.322,0.018],[0.950,0.012],[0.980,0.010]] },
+  { name: "Perm. Alizarin Crimson", hex: "#8b1a2a", km: [[0.200,0.015],[0.920,0.008],[0.850,0.007]] },
+  { name: "Cadmium Yellow",         hex: "#f5c800", km: [[0.028,0.025],[0.060,0.060],[0.980,0.012]] },
+  { name: "Viridian Hue",           hex: "#3d9970", km: [[0.820,0.012],[0.120,0.045],[0.650,0.018]] },
+  { name: "Cerulean Blue Hue",      hex: "#3a7fbf", km: [[0.680,0.020],[0.320,0.035],[0.080,0.055]] },
+  { name: "French Ultramarine",     hex: "#1a2e8b", km: [[0.780,0.010],[0.680,0.012],[0.060,0.060]] },
+  { name: "Burnt Sienna",           hex: "#8b4513", km: [[0.150,0.040],[0.520,0.025],[0.880,0.012]] },
+  { name: "Burnt Umber",            hex: "#5c3010", km: [[0.280,0.030],[0.640,0.018],[0.920,0.010]] },
+  { name: "Titanium White",         hex: "#f2f0e8", km: [[0.003,0.950],[0.003,0.940],[0.004,0.900]] },
 ];
 
 let editingIndex = null;
 
+// ─── BASIC COLOR UTILITIES ───────────────────────────────────────────────────
 function hexToRgb(hex) {
   hex = hex.replace('#','');
   if (hex.length === 3) hex = hex.split('').map(c=>c+c).join('');
@@ -647,151 +651,211 @@ function hexToRgb(hex) {
     b: parseInt(hex.slice(4,6),16)
   };
 }
-
 function rgbToHex(r,g,b) {
-  return '#' + [r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('');
+  return '#' + [r,g,b].map(v => Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join('');
 }
-
-// sRGB → linear
 function toLinear(c) {
   c /= 255;
   return c <= 0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4);
 }
-
-// RGB → XYZ (D65)
-function rgbToXyz(r,g,b) {
-  const rl = toLinear(r), gl = toLinear(g), bl = toLinear(b);
+function fromLinear(c) {
+  return c <= 0.0031308 ? 12.92*c : 1.055*Math.pow(c, 1/2.4) - 0.055;
+}
+function rgbToLinear(r,g,b) {
+  return [toLinear(r), toLinear(g), toLinear(b)];
+}
+function linearToRgb(lr,lg,lb) {
   return {
-    x: rl*0.4124564 + gl*0.3575761 + bl*0.1804375,
-    y: rl*0.2126729 + gl*0.7151522 + bl*0.0721750,
-    z: rl*0.0193339 + gl*0.1191920 + bl*0.9503041,
+    r: Math.round(Math.max(0,Math.min(1,fromLinear(lr)))*255),
+    g: Math.round(Math.max(0,Math.min(1,fromLinear(lg)))*255),
+    b: Math.round(Math.max(0,Math.min(1,fromLinear(lb)))*255),
   };
 }
 
-// XYZ → Lab
-function xyzToLab({x,y,z}) {
+// ─── KUBELKA-MUNK ENGINE ─────────────────────────────────────────────────────
+// Reflectance → K/S ratio
+function reflToKS(R) {
+  R = Math.max(0.001, Math.min(0.999, R));
+  return (1 - R) * (1 - R) / (2 * R);
+}
+
+// K/S ratio → reflectance (Saunderson simplified, opaque layer)
+function ksToRefl(ks) {
+  // R = 1 + K/S - sqrt((K/S)^2 + 2*(K/S))
+  return 1 + ks - Math.sqrt(ks * ks + 2 * ks);
+}
+
+// Convert an RGB hex color to per-channel K/S ratios [r,g,b]
+function hexToKS(hex) {
+  const {r,g,b} = hexToRgb(hex);
+  const [lr,lg,lb] = rgbToLinear(r,g,b);
+  return [ reflToKS(lr), reflToKS(lg), reflToKS(lb) ];
+}
+
+// Mix N paints by weights using Kubelka-Munk:
+// Weighted sum of K and S separately per channel, then convert back to reflectance.
+// paints: [{ks:[ksR,ksG,ksB], km:[[Kr,Sr],[Kg,Sg],[Kb,Sb]]}, ...], weights: [w0,w1,...]
+// We use the palette's km coefficients directly when available for richer mixing.
+function kmMix(entries, weights) {
+  // entries: array of { km } from palette; weights: array of fractions summing to 1
+  const result = [0,0,0]; // reflectance per channel
+  for (let ch=0; ch<3; ch++) {
+    let K=0, S=0;
+    for (let i=0; i<entries.length; i++) {
+      K += weights[i] * entries[i].km[ch][0];
+      S += weights[i] * entries[i].km[ch][1];
+    }
+    result[ch] = ksToRefl(K / Math.max(S, 1e-6));
+  }
+  return result; // [linearR, linearG, linearB]
+}
+
+// Convert linear reflectance [r,g,b] → Lab
+function linearToLab(lr,lg,lb) {
+  const x = lr*0.4124564 + lg*0.3575761 + lb*0.1804375;
+  const y = lr*0.2126729 + lg*0.7151522 + lb*0.0721750;
+  const z = lr*0.0193339 + lg*0.1191920 + lb*0.9503041;
   const Xn=0.95047, Yn=1.0, Zn=1.08883;
   function f(t) { return t>0.008856 ? Math.cbrt(t) : 7.787*t+16/116; }
-  return {
-    L: 116*f(y/Yn)-16,
-    a: 500*(f(x/Xn)-f(y/Yn)),
-    b: 200*(f(y/Yn)-f(z/Zn))
-  };
+  return { L: 116*f(y/Yn)-16, a: 500*(f(x/Xn)-f(y/Yn)), b: 200*(f(y/Yn)-f(z/Zn)) };
 }
 
-function rgbToLab(r,g,b) { return xyzToLab(rgbToXyz(r,g,b)); }
-
-function deltaE(lab1, lab2) {
-  return Math.sqrt((lab1.L-lab2.L)**2 + (lab1.a-lab2.a)**2 + (lab1.b-lab2.b)**2);
+function rgbToLab(r,g,b) {
+  return linearToLab(...rgbToLinear(r,g,b));
 }
 
-// Mix two Lab colors at ratio t (0=pure A, 1=pure B) — in Lab space
-function mixLab(labA, labB, t) {
-  return { L: labA.L*(1-t)+labB.L*t, a: labA.a*(1-t)+labB.a*t, b: labA.b*(1-t)+labB.b*t };
-}
-
-// Lab → XYZ → RGB approx (for preview swatch)
 function labToRgb(lab) {
   const Xn=0.95047, Yn=1.0, Zn=1.08883;
-  const fy = (lab.L+16)/116;
-  const fx = lab.a/500+fy;
-  const fz = fy-lab.b/200;
+  const fy=(lab.L+16)/116, fx=lab.a/500+fy, fz=fy-lab.b/200;
   function inv(t) { return t>0.2069 ? t**3 : (t-16/116)/7.787; }
   const x=inv(fx)*Xn, y=inv(fy)*Yn, z=inv(fz)*Zn;
-  let r =  x*3.2404542 - y*1.5371385 - z*0.4985314;
-  let g = -x*0.9692660 + y*1.8760108 + z*0.0415560;
-  let b =  x*0.0556434 - y*0.2040259 + z*1.0572252;
-  function fromLinear(c) { return c<=0.0031308 ? 12.92*c : 1.055*Math.pow(c,1/2.4)-0.055; }
-  r=fromLinear(r); g=fromLinear(g); b=fromLinear(b);
-  const clamp = v => Math.max(0,Math.min(1,v));
-  return { r: Math.round(clamp(r)*255), g: Math.round(clamp(g)*255), b: Math.round(clamp(b)*255) };
+  return linearToRgb(
+     x*3.2404542 - y*1.5371385 - z*0.4985314,
+    -x*0.9692660 + y*1.8760108 + z*0.0415560,
+     x*0.0556434 - y*0.2040259 + z*1.0572252
+  );
 }
 
-// Find the best 1-paint and best 2-paint mix
-// 3-way Lab mix: wA + wB + wW = 1
-function mix3Lab(labA, labB, labW, wA, wB) {
-  const wW = 1 - wA - wB;
-  return {
-    L: labA.L*wA + labB.L*wB + labW.L*wW,
-    a: labA.a*wA + labB.a*wB + labW.a*wW,
-    b: labA.b*wA + labB.b*wB + labW.b*wW,
-  };
+// CIEDE2000 — perceptually uniform color difference
+function deltaE(lab1, lab2) {
+  const deg = Math.PI/180;
+  const {L:L1,a:a1,b:b1} = lab1, {L:L2,a:a2,b:b2} = lab2;
+  const Lbar = (L1+L2)/2;
+  const C1 = Math.sqrt(a1**2+b1**2), C2 = Math.sqrt(a2**2+b2**2);
+  const Cbar = (C1+C2)/2;
+  const C7 = Cbar**7, G = 0.5*(1-Math.sqrt(C7/(C7+25**7)));
+  const a1p = a1*(1+G), a2p = a2*(1+G);
+  const C1p = Math.sqrt(a1p**2+b1**2), C2p = Math.sqrt(a2p**2+b2**2);
+  const Cbarp = (C1p+C2p)/2;
+  const h1p = (Math.atan2(b1,a1p)*180/Math.PI+360)%360;
+  const h2p = (Math.atan2(b2,a2p)*180/Math.PI+360)%360;
+  const dLp = L2-L1;
+  const dCp = C2p-C1p;
+  let dhp = h2p-h1p;
+  if (Math.abs(dhp)>180) dhp += dhp<0 ? 360 : -360;
+  const dHp = 2*Math.sqrt(C1p*C2p)*Math.sin(dhp/2*deg);
+  const Hbarp = Math.abs(h1p-h2p)>180 ? (h1p+h2p+360)/2 : (h1p+h2p)/2;
+  const T = 1
+    - 0.17*Math.cos((Hbarp-30)*deg)
+    + 0.24*Math.cos(2*Hbarp*deg)
+    + 0.32*Math.cos((3*Hbarp+6)*deg)
+    - 0.20*Math.cos((4*Hbarp-63)*deg);
+  const SL = 1 + 0.015*(Lbar-50)**2/Math.sqrt(20+(Lbar-50)**2);
+  const SC = 1 + 0.045*Cbarp;
+  const SH = 1 + 0.015*Cbarp*T;
+  const Cbarp7 = Cbarp**7;
+  const RC = 2*Math.sqrt(Cbarp7/(Cbarp7+25**7));
+  const dTheta = 30*Math.exp(-((Hbarp-275)/25)**2);
+  const RT = -Math.sin(2*dTheta*deg)*RC;
+  return Math.sqrt((dLp/SL)**2+(dCp/SC)**2+(dHp/SH)**2+RT*(dCp/SC)*(dHp/SH));
+}
+
+// ─── KM-BASED MIX → Lab ─────────────────────────────────────────────────────
+function mixToLab(entries, weights) {
+  const [lr,lg,lb] = kmMix(entries, weights);
+  return linearToLab(lr,lg,lb);
+}
+function mixToHex(entries, weights) {
+  const [lr,lg,lb] = kmMix(entries, weights);
+  const {r,g,b} = linearToRgb(lr,lg,lb);
+  return rgbToHex(r,g,b);
+}
+
+// ─── FIND BEST MIX ──────────────────────────────────────────────────────────
+function findWhiteIdx() {
+  // Lightest paint (highest L in Lab) = our white
+  let best = 0, bestL = -Infinity;
+  palette.forEach((p,i) => {
+    const {r,g,b} = hexToRgb(p.hex);
+    const lab = rgbToLab(r,g,b);
+    if (lab.L > bestL) { bestL = lab.L; best = i; }
+  });
+  return best;
 }
 
 function findBestMix(r, g, b) {
   const targetLab = rgbToLab(r,g,b);
-  const paletteLabs = palette.map(p => { const c=hexToRgb(p.hex); return rgbToLab(c.r,c.g,c.b); });
+  const whiteIdx = findWhiteIdx();
+  const STEPS = 19; // ratio resolution: 1/20 = 5%
 
-  // Find white index (closest to pure white in palette)
-  const whiteLab = rgbToLab(242, 240, 232); // Titanium White reference
-  let whiteIdx = 0;
-  let whiteDE = Infinity;
-  paletteLabs.forEach((lab,i) => {
-    const d = deltaE(whiteLab, lab);
-    if (d < whiteDE) { whiteDE = d; whiteIdx = i; }
-  });
-  const wLab = paletteLabs[whiteIdx];
-
-  // Best single
+  // ── Best single ──
   let bestSingle = { dE: Infinity, idx: 0 };
-  paletteLabs.forEach((lab,i) => {
+  palette.forEach((p,i) => {
+    const {r:pr,g:pg,b:pb} = hexToRgb(p.hex);
+    const lab = rgbToLab(pr,pg,pb);
     const d = deltaE(targetLab, lab);
     if (d < bestSingle.dE) bestSingle = { dE: d, idx: i };
   });
 
-  // Best 2-color mix (no white constraint — any two colors)
-  let bestPair = { dE: Infinity, idxA: 0, idxB: 1, ratio: 0.5, hasWhite: false, whiteRatio: 0 };
+  // ── Best 2-color (KM subtractive) ──
+  let bestPair = { dE: Infinity, idxA:0, idxB:1, wA:0.5, wB:0.5 };
   for (let i=0; i<palette.length; i++) {
     for (let j=i+1; j<palette.length; j++) {
-      for (let t=0.05; t<=0.95; t+=0.05) {
-        const mixed = mixLab(paletteLabs[i], paletteLabs[j], t);
-        const d = deltaE(targetLab, mixed);
-        if (d < bestPair.dE) bestPair = { dE: d, idxA: i, idxB: j, ratio: t, hasWhite: false, whiteRatio: 0 };
+      for (let s=1; s<STEPS; s++) {
+        const wA = s/STEPS, wB = 1-wA;
+        const lab = mixToLab([palette[i], palette[j]], [wA, wB]);
+        const d = deltaE(targetLab, lab);
+        if (d < bestPair.dE) bestPair = { dE:d, idxA:i, idxB:j, wA, wB };
       }
     }
   }
 
-  // Best 2-color + white (color A + color B + white), exclude white-as-A or white-as-B
-  // wA = share of color A among non-white, wW = white portion of total
-  let bestTriple = { dE: Infinity, idxA: 0, idxB: 1, wA: 0.5, wB: 0.3, wW: 0.2, hasWhite: true };
+  // ── Best 1-color + white (KM) ──
+  let bestSingleWhite = { dE: Infinity, idx:0, wC:0.7, wW:0.3, whiteIdx };
+  for (let i=0; i<palette.length; i++) {
+    if (i === whiteIdx) continue;
+    for (let s=1; s<STEPS; s++) {
+      const wC = s/STEPS, wW = 1-wC;
+      const lab = mixToLab([palette[i], palette[whiteIdx]], [wC, wW]);
+      const d = deltaE(targetLab, lab);
+      if (d < bestSingleWhite.dE) bestSingleWhite = { dE:d, idx:i, wC, wW, whiteIdx };
+    }
+  }
+
+  // ── Best 2-color + white (KM) ──
+  let bestTriple = { dE: Infinity, idxA:0, idxB:1, wA:0.4, wB:0.4, wW:0.2, whiteIdx };
   for (let i=0; i<palette.length; i++) {
     if (i === whiteIdx) continue;
     for (let j=i+1; j<palette.length; j++) {
       if (j === whiteIdx) continue;
-      // sweep white proportion 10%-70%, then split remainder between A and B
-      for (let wW=0.10; wW<=0.70; wW+=0.10) {
+      // white in 10% increments, then split remainder in 5% steps
+      for (let ww=1; ww<=7; ww++) {
+        const wW = ww * 0.10;
         const rem = 1 - wW;
-        for (let t=0.05; t<=0.95; t+=0.05) {
-          const wA = rem * (1 - t);
-          const wB = rem * t;
-          const mixed = mix3Lab(paletteLabs[i], paletteLabs[j], wLab, wA, wB);
-          const d = deltaE(targetLab, mixed);
-          if (d < bestTriple.dE) bestTriple = { dE: d, idxA: i, idxB: j, wA, wB, wW, hasWhite: true, whiteIdx };
+        for (let s=1; s<STEPS; s++) {
+          const wA = rem * s/STEPS, wB = rem - wA;
+          const lab = mixToLab([palette[i], palette[j], palette[whiteIdx]], [wA, wB, wW]);
+          const d = deltaE(targetLab, lab);
+          if (d < bestTriple.dE) bestTriple = { dE:d, idxA:i, idxB:j, wA, wB, wW, whiteIdx };
         }
       }
     }
   }
 
-  // Also try single color + white
-  let bestSingleWhite = { dE: Infinity, idx: 0, wC: 0.7, wW: 0.3, hasWhite: true, whiteIdx };
-  for (let i=0; i<palette.length; i++) {
-    if (i === whiteIdx) continue;
-    for (let wW=0.05; wW<=0.90; wW+=0.05) {
-      const wC = 1 - wW;
-      const mixed = mix3Lab(paletteLabs[i], wLab, wLab, wC, 0);
-      // simpler: just lerp color→white
-      const mixedSimple = mixLab(paletteLabs[i], wLab, wW);
-      const d = deltaE(targetLab, mixedSimple);
-      if (d < bestSingleWhite.dE) bestSingleWhite = { dE: d, idx: i, wC, wW: wW, hasWhite: true, whiteIdx };
-    }
-  }
-
-  // Pick best overall 2-or-3 component mix
-  // Options: bestPair (2 colors), bestSingleWhite (1 color + white), bestTriple (2 colors + white)
-  let bestComplex = bestPair;
+  // ── Pick best complex mix ──
+  let bestComplex = { ...bestPair, type: 'pair' };
   if (bestSingleWhite.dE < bestComplex.dE) bestComplex = { ...bestSingleWhite, type: 'singleWhite' };
   if (bestTriple.dE < bestComplex.dE) bestComplex = { ...bestTriple, type: 'triple' };
-  if (!bestComplex.type) bestComplex.type = 'pair';
 
   return { single: bestSingle, complex: bestComplex, whiteIdx, targetLab };
 }
@@ -999,15 +1063,6 @@ uploadZone.addEventListener('touchend', () => {
 });
 
 // ─── PANEL UPDATE ─────────────────────────────────────────────────────────────
-function makePreviewHex(components) {
-  // components: [{labColor, weight}, ...]
-  const total = components.reduce((s,c) => s+c.weight, 0);
-  let L=0,a=0,b=0;
-  components.forEach(c => { L+=c.lab.L*c.weight/total; a+=c.lab.a*c.weight/total; b+=c.lab.b*c.weight/total; });
-  const rgb = labToRgb({L,a,b});
-  return rgbToHex(rgb.r,rgb.g,rgb.b);
-}
-
 function makeCard(isBest, tag, dE, rows, previewHex, note) {
   const card = document.createElement('div');
   card.className = 'match-card' + (isBest ? ' best' : '');
@@ -1041,7 +1096,6 @@ function updatePanel(r, g, b) {
   document.getElementById('rgb-val').textContent = `rgb(${r}, ${g}, ${b})`;
 
   const { single, complex, whiteIdx } = findBestMix(r, g, b);
-  const paletteLabs = palette.map(p => { const c=hexToRgb(p.hex); return rgbToLab(c.r,c.g,c.b); });
 
   const mr = document.getElementById('match-result');
   mr.innerHTML = '';
@@ -1049,82 +1103,67 @@ function updatePanel(r, g, b) {
   const complexIsBest = complex.dE < single.dE;
 
   // === SINGLE PAINT CARD ===
-  const singlePreviewHex = palette[single.idx].hex;
   mr.appendChild(makeCard(
     !complexIsBest,
     'Single Paint',
     single.dE,
     [{ hex: palette[single.idx].hex, name: palette[single.idx].name, pct: 100 }],
-    singlePreviewHex,
+    palette[single.idx].hex,
     'Use straight from tube'
   ));
 
   // === COMPLEX MIX CARD ===
-  let rows = [], components = [], tag = '', note = '';
+  let entries = [], weights = [], rows = [], tag = '', note = '';
 
   if (complex.type === 'pair') {
-    const pA = Math.round((1 - complex.ratio) * 100);
-    const pB = 100 - pA;
+    const pA = Math.round(complex.wA * 100), pB = 100 - pA;
+    entries = [palette[complex.idxA], palette[complex.idxB]];
+    weights = [complex.wA, complex.wB];
     rows = [
       { hex: palette[complex.idxA].hex, name: palette[complex.idxA].name, pct: pA },
       { hex: palette[complex.idxB].hex, name: palette[complex.idxB].name, pct: pB },
     ];
-    components = [
-      { lab: paletteLabs[complex.idxA], weight: pA },
-      { lab: paletteLabs[complex.idxB], weight: pB },
-    ];
-    tag = '2-Color Mix';
-    note = 'Mixed result preview';
+    tag = '2-Color Mix'; note = 'KM subtractive preview';
 
   } else if (complex.type === 'singleWhite') {
-    const pC = Math.round(complex.wC * 100);
-    const pW = 100 - pC;
+    const pC = Math.round(complex.wC * 100), pW = 100 - pC;
+    entries = [palette[complex.idx], palette[whiteIdx]];
+    weights = [complex.wC, complex.wW];
     rows = [
       { hex: palette[complex.idx].hex, name: palette[complex.idx].name, pct: pC },
       { hex: palette[whiteIdx].hex, name: palette[whiteIdx].name, pct: pW },
     ];
-    components = [
-      { lab: paletteLabs[complex.idx], weight: pC },
-      { lab: paletteLabs[whiteIdx], weight: pW },
-    ];
-    tag = 'Color + White';
-    note = 'Lightened with white';
+    tag = 'Color + White'; note = 'KM subtractive preview';
 
   } else if (complex.type === 'triple') {
     const pA = Math.round(complex.wA * 100);
     const pB = Math.round(complex.wB * 100);
-    const pW = 100 - pA - pB;
+    const pW = Math.max(0, 100 - pA - pB);
+    const wWact = 1 - complex.wA - complex.wB;
+    entries = [palette[complex.idxA], palette[complex.idxB], palette[whiteIdx]];
+    weights = [complex.wA, complex.wB, wWact];
     rows = [
       { hex: palette[complex.idxA].hex, name: palette[complex.idxA].name, pct: pA },
       { hex: palette[complex.idxB].hex, name: palette[complex.idxB].name, pct: pB },
-      { hex: palette[whiteIdx].hex, name: palette[whiteIdx].name, pct: pW },
+      { hex: palette[whiteIdx].hex,     name: palette[whiteIdx].name,     pct: pW },
     ];
-    components = [
-      { lab: paletteLabs[complex.idxA], weight: pA },
-      { lab: paletteLabs[complex.idxB], weight: pB },
-      { lab: paletteLabs[whiteIdx], weight: pW },
-    ];
-    tag = '3-Color Mix';
-    note = 'Mixed result preview';
+    tag = '3-Color Mix'; note = 'KM subtractive preview';
   }
 
-  const previewHex = makePreviewHex(components);
+  // Preview swatch uses KM mixing — shows predicted on-canvas color
+  const previewHex = mixToHex(entries, weights);
   mr.appendChild(makeCard(complexIsBest, tag, complex.dE, rows, previewHex, note));
 
   // ΔE guidance
   const bestDE = Math.min(single.dE, complex.dE);
   const guidance = document.createElement('p');
   guidance.style.cssText = 'font-size:0.62rem;color:var(--warm-mid);text-align:center;line-height:1.6;margin-top:4px;';
-  guidance.textContent = bestDE < 5 ? '✓ Excellent match' : bestDE < 15 ? '~ Good match' : '△ Approximate — limited by palette';
+  guidance.textContent = bestDE < 3 ? '✓ Excellent match' : bestDE < 8 ? '~ Good match' : bestDE < 15 ? '△ Fair — try adjusting ratios' : '✗ Limited by palette range';
   mr.appendChild(guidance);
 }
 
-// ─── INIT ─────────────────────────────────────────────────────────────────────
-function rgbToLab2(r,g,b) { return rgbToLab(r,g,b); } // alias
+// ─── INIT ────────────────────────────────────────────────────────────────────
 renderPalette();
-
-// fix varargs call
-const _origRgbToLab = rgbToLab;
 </script>
 </body>
 </html>
