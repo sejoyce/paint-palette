@@ -766,7 +766,7 @@ function deltaE(lab1, lab2) {
   const SH = 1 + 0.015*Cbarp*T;
   const Cbarp7 = Cbarp**7;
   const RC = 2*Math.sqrt(Cbarp7/(Cbarp7+25**7));
-  const dTheta = 30*Math.exp(-((Hbarp-275)/25)**2);
+  const dTheta = 30*Math.exp((-(((Hbarp-275)/25)**2)));
   const RT = -Math.sin(2*dTheta*deg)*RC;
   return Math.sqrt((dLp/SL)**2+(dCp/SC)**2+(dHp/SH)**2+RT*(dCp/SC)*(dHp/SH));
 }
