@@ -564,7 +564,7 @@
 
 <div class="layout">
   <div class="canvas-area">
-    <div class="upload-zone" id="upload-zone">
+    <label for="file-input" class="upload-zone" id="upload-zone">
       <div class="upload-prompt" id="upload-prompt">
         <div class="icon">🖼</div>
         <strong>Drop your reference photo here</strong>
@@ -574,9 +574,9 @@
       <canvas id="hidden-canvas"></canvas>
       <div class="hover-crosshair" id="crosshair"></div>
       <div class="sample-swatch" id="sample-swatch"></div>
-      <input type="file" id="file-input" accept="image/*" />
-      <button id="change-photo-btn" style="display:none;position:absolute;bottom:10px;right:10px;z-index:10;padding:5px 11px;font-family:'DM Mono',monospace;font-size:0.65rem;background:rgba(26,18,8,0.6);color:#f5efe4;border:1px solid rgba(245,239,228,0.3);border-radius:3px;cursor:pointer;align-items:center;gap:5px;letter-spacing:0.05em;backdrop-filter:blur(4px);" onclick="fileInput.style.pointerEvents='auto';fileInput.click();fileInput.style.pointerEvents='none';">⟳ Change Photo</button>
-    </div>
+      <button id="change-photo-btn" style="display:none;position:absolute;bottom:10px;right:10px;z-index:10;padding:5px 11px;font-family:'DM Mono',monospace;font-size:0.65rem;background:rgba(26,18,8,0.6);color:#f5efe4;border:1px solid rgba(245,239,228,0.3);border-radius:3px;cursor:pointer;display:none;align-items:center;gap:5px;letter-spacing:0.05em;backdrop-filter:blur(4px);" onclick="event.preventDefault();fileInput.click();">⟳ Change Photo</button>
+    </label>
+    <input type="file" id="file-input" accept="image/*" />
   </div>
 
   <div class="side-panel">
@@ -971,8 +971,10 @@ function loadImage(file) {
       uploadZone.classList.add('has-image');
       uploadZone.style.cursor = 'crosshair';
       // Disable file input overlay so hover sampling works; use change-photo button instead
-      fileInput.style.pointerEvents = 'none';
-      document.getElementById('change-photo-btn').style.display = 'flex';
+      // Disconnect label from input so hovering doesn't accidentally open picker
+      document.getElementById('upload-zone').removeAttribute('for');
+      const btn = document.getElementById('change-photo-btn');
+      btn.style.display = 'flex';
     };
     img.src = url;
   };
