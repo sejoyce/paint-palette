@@ -1,4 +1,4 @@
 # paint-palette
 Upload a reference image for your painting, get help mixing the correct colors
 
-<img width="3827" height="1727" alt="demo" src="https://github.com/user-attachments/assets/069d1f68-34da-4a70-803e-fd5c87fb7cde" />
+<img width="3837" height="1730" alt="paint-palette" src="https://github.com/user-attachments/assets/31f9b168-1d22-4e00-afa1-d58348e8f712" />
