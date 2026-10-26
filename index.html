@@ -1036,9 +1036,11 @@ function loadImage(file) {
       document.getElementById('upload-prompt').style.display = 'none';
       uploadZone.classList.add('has-image');
       uploadZone.style.cursor = 'crosshair';
-      // Disable file input overlay so hover sampling works; use change-photo button instead
-      // Disconnect label from input so hovering doesn't accidentally open picker
+      // Disconnect label from input so clicks no longer open the file picker;
+      // the Change Photo button handles that explicitly.
       document.getElementById('upload-zone').removeAttribute('for');
+      // Belt-and-suspenders: block any residual click on the label element itself
+      uploadZone._blockClick = true;
       const btn = document.getElementById('change-photo-btn');
       btn.style.display = 'flex';
       document.getElementById('zoom-toolbar').classList.add('visible');
@@ -1171,18 +1173,27 @@ uploadZone.addEventListener('mousemove', e => {
 });
 
 uploadZone.addEventListener('mousedown', e => {
-  if (panMode && zoom > 1 && uploadZone.classList.contains('has-image')) {
+  if (!uploadZone.classList.contains('has-image')) return;
+  // Always prevent the label from opening the file picker when an image is loaded;
+  // the Change Photo button handles that explicitly via fileInput.click().
+  e.preventDefault();
+  if (panMode && zoom > 1) {
     isPanning = true;
     panStartX = e.clientX; panStartY = e.clientY;
     panStartOffsetX = panX; panStartOffsetY = panY;
     uploadZone.style.cursor = 'grabbing';
-    e.preventDefault();
   }
 });
 
 uploadZone.addEventListener('mouseup', () => {
   isPanning = false;
   updateCursor();
+});
+
+// Once an image is loaded, block any click on the label so it can't reopen the file picker.
+// The Change Photo button calls fileInput.click() directly and bypasses this.
+uploadZone.addEventListener('click', e => {
+  if (uploadZone._blockClick) e.preventDefault();
 });
 
 uploadZone.addEventListener('mouseleave', () => {
