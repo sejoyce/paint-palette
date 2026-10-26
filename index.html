@@ -1109,9 +1109,19 @@ function updateCursor() {
 function updatePanBtn() {
   const btn = document.getElementById('pan-mode-btn');
   if (!btn) return;
-  btn.style.display = zoom > 1 ? 'inline-block' : 'none';
+  // Always show once an image is loaded (toolbar is visible)
+  btn.style.display = 'inline-block';
   btn.classList.toggle('active', panMode);
-  btn.textContent = panMode ? '✥ Pan' : '✦ Sample';
+  // Grey out at 1× zoom since panning has no effect there
+  btn.style.opacity = zoom <= 1 ? '0.45' : '1';
+  btn.style.pointerEvents = zoom <= 1 ? 'none' : 'auto';
+  if (panMode) {
+    btn.textContent = '✥ Pan mode';
+    btn.title = 'Currently panning — click to switch to Sample mode (pick colors)';
+  } else {
+    btn.textContent = '✦ Sample mode';
+    btn.title = 'Currently sampling colors — zoom in, then click to switch to Pan mode (drag image to reposition)';
+  }
 }
 
 // Scroll wheel zoom
