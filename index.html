@@ -78,9 +78,9 @@
 
     .canvas-area {
       padding: 12px;
-      height: 60vw;
-      min-height: 240px;
-      max-height: 400px;
+      height: 72vw;
+      min-height: 300px;
+      max-height: 520px;
     }
 
     .side-panel {
@@ -103,8 +103,41 @@
     padding: 24px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 10px;
     overflow: hidden;
+  }
+
+  .zoom-toolbar {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .zoom-toolbar.visible { display: flex; }
+
+  .zoom-btn {
+    padding: 4px 11px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.75rem;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+    color: var(--ink);
+    transition: background 0.15s, border-color 0.15s;
+    line-height: 1.4;
+  }
+  .zoom-btn:hover { background: var(--parchment); border-color: var(--warm-mid); }
+  .zoom-btn.reset { color: var(--warm-mid); font-size: 0.65rem; letter-spacing: 0.06em; }
+  .zoom-btn.active { background: var(--ink); color: var(--parchment); border-color: var(--ink); }
+
+  .zoom-level {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--warm-mid);
+    min-width: 38px;
+    text-align: center;
   }
 
   .upload-zone {
@@ -120,6 +153,12 @@
     position: relative;
     overflow: hidden;
     background: rgba(255,253,248,0.5);
+    touch-action: none;
+  }
+
+  #canvas-display {
+    transform-origin: center center;
+    transition: transform 0.15s ease;
   }
 
   .upload-zone:hover { border-color: var(--gold); background: rgba(200,150,46,0.04); }
@@ -158,6 +197,7 @@
     border-radius: 2px;
     pointer-events: none;
     user-select: none;
+    transform-origin: center center;
   }
 
   #hidden-canvas { display: none; }
@@ -564,6 +604,13 @@
 
 <div class="layout">
   <div class="canvas-area">
+    <div class="zoom-toolbar" id="zoom-toolbar">
+      <button class="zoom-btn" id="zoom-out-btn" onclick="adjustZoom(-0.25)">−</button>
+      <span class="zoom-level" id="zoom-level">100%</span>
+      <button class="zoom-btn" id="zoom-in-btn" onclick="adjustZoom(0.25)">+</button>
+      <button class="zoom-btn" id="pan-mode-btn" onclick="togglePanMode()" title="Toggle pan / sample mode" style="display:none">✥ Pan</button>
+      <button class="zoom-btn reset" onclick="resetZoom()">Reset</button>
+    </div>
     <label for="file-input" class="upload-zone" id="upload-zone">
       <div class="upload-prompt" id="upload-prompt">
         <div class="icon">🖼</div>
@@ -637,6 +684,7 @@ let palette = [
   { name: "French Ultramarine",     hex: "#1a2e8b", km: [[0.780,0.010],[0.680,0.012],[0.060,0.060]] },
   { name: "Burnt Sienna",           hex: "#8b4513", km: [[0.150,0.040],[0.520,0.025],[0.880,0.012]] },
   { name: "Burnt Umber",            hex: "#5c3010", km: [[0.280,0.030],[0.640,0.018],[0.920,0.010]] },
+  { name: "Sap Green",              hex: "#4a7c3f", km: [[0.680,0.014],[0.180,0.050],[0.820,0.012]] },
   { name: "Titanium White",         hex: "#f2f0e8", km: [[0.003,0.950],[0.003,0.940],[0.004,0.900]] },
 ];
 
@@ -909,15 +957,33 @@ function closeModal() {
   editingIndex = null;
 }
 
+// Derive KM coefficients from a hex color.
+// Uses reflectance-based K/S estimation: dark channels get high K (absorption),
+// light channels get high S (scattering). A small S floor keeps mixing stable.
+function kmFromHex(hex) {
+  const {r,g,b} = hexToRgb(hex);
+  const channels = [r,g,b];
+  return channels.map(c => {
+    const lin = Math.max(0.001, Math.min(0.999, toLinear(c)));
+    const ks = reflToKS(lin);
+    // Estimate S: lighter colors scatter more, darker absorb more
+    const S = Math.max(0.008, 0.06 * lin + 0.008);
+    const K = ks * S;
+    return [K, S];
+  });
+}
+
 function saveColor() {
   const name = document.getElementById('edit-name').value.trim();
   const hex = document.getElementById('edit-color').value;
   if (!name) { document.getElementById('edit-name').focus(); return; }
+  const km = kmFromHex(hex);
   if (editingIndex !== null) {
     palette[editingIndex].name = name;
     palette[editingIndex].hex = hex;
+    palette[editingIndex].km = km;
   } else {
-    palette.push({ name, hex });
+    palette.push({ name, hex, km });
   }
   renderPalette();
   closeModal();
@@ -975,75 +1041,209 @@ function loadImage(file) {
       document.getElementById('upload-zone').removeAttribute('for');
       const btn = document.getElementById('change-photo-btn');
       btn.style.display = 'flex';
+      document.getElementById('zoom-toolbar').classList.add('visible');
+      updatePanBtn();
+      resetZoom();
     };
     img.src = url;
   };
   reader.readAsDataURL(file);
 }
 
+// ─── ZOOM STATE ───────────────────────────────────────────────────────────────
+let zoom = 1;
+let panX = 0, panY = 0;
+let isPanning = false;
+let panStartX = 0, panStartY = 0;
+let panStartOffsetX = 0, panStartOffsetY = 0;
+let panMode = false; // when true: drag pans; when false: drag/tap samples
+
+function applyTransform() {
+  displayImg.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+  document.getElementById('zoom-level').textContent = Math.round(zoom * 100) + '%';
+}
+
+function clampPan() {
+  if (!displayImg.style.display || displayImg.style.display === 'none') return;
+  const zoneRect = uploadZone.getBoundingClientRect();
+  const naturalW = displayImg.naturalWidth || displayImg.offsetWidth;
+  const naturalH = displayImg.naturalHeight || displayImg.offsetHeight;
+  // Get base rendered size (before zoom)
+  const baseW = displayImg.offsetWidth;
+  const baseH = displayImg.offsetHeight;
+  const maxPanX = Math.max(0, (baseW * zoom - zoneRect.width) / 2);
+  const maxPanY = Math.max(0, (baseH * zoom - zoneRect.height) / 2);
+  panX = Math.max(-maxPanX, Math.min(maxPanX, panX));
+  panY = Math.max(-maxPanY, Math.min(maxPanY, panY));
+}
+
+function adjustZoom(delta) {
+  zoom = Math.max(1, Math.min(8, zoom + delta));
+  if (zoom === 1) { panX = 0; panY = 0; panMode = false; }
+  clampPan();
+  applyTransform();
+  updateCursor();
+  updatePanBtn();
+}
+
+function resetZoom() {
+  zoom = 1; panX = 0; panY = 0; panMode = false;
+  applyTransform();
+  updateCursor();
+  updatePanBtn();
+}
+
+function togglePanMode() {
+  panMode = !panMode;
+  updateCursor();
+  updatePanBtn();
+}
+
+function updateCursor() {
+  if (zoom <= 1) { uploadZone.style.cursor = 'crosshair'; return; }
+  uploadZone.style.cursor = panMode ? 'grab' : 'crosshair';
+}
+
+function updatePanBtn() {
+  const btn = document.getElementById('pan-mode-btn');
+  if (!btn) return;
+  btn.style.display = zoom > 1 ? 'inline-block' : 'none';
+  btn.classList.toggle('active', panMode);
+  btn.textContent = panMode ? '✥ Pan' : '✦ Sample';
+}
+
+// Scroll wheel zoom
+uploadZone.addEventListener('wheel', e => {
+  if (!uploadZone.classList.contains('has-image')) return;
+  e.preventDefault();
+  const delta = e.deltaY < 0 ? 0.25 : -0.25;
+  adjustZoom(delta);
+}, { passive: false });
+
+// ─── COORDINATE HELPER ────────────────────────────────────────────────────────
+// Convert a client-space point to canvas pixel coords, accounting for zoom+pan.
+function clientToCanvasPixel(clientX, clientY) {
+  // Get the image's bounding rect (already includes zoom transform)
+  const imgRect = displayImg.getBoundingClientRect();
+  const mx = clientX - imgRect.left;
+  const my = clientY - imgRect.top;
+  if (mx < 0 || my < 0 || mx > imgRect.width || my > imgRect.height) return null;
+  // Map from screen coords within the zoomed image to canvas pixel coords
+  const scaleX = canvasEl.width / imgRect.width;
+  const scaleY = canvasEl.height / imgRect.height;
+  return { px: Math.floor(mx * scaleX), py: Math.floor(my * scaleY) };
+}
+
 // ─── HOVER SAMPLING ───────────────────────────────────────────────────────────
 uploadZone.addEventListener('mousemove', e => {
   if (!uploadZone.classList.contains('has-image')) return;
 
+  // Panning
+  if (isPanning && panMode && zoom > 1) {
+    panX = panStartOffsetX + (e.clientX - panStartX);
+    panY = panStartOffsetY + (e.clientY - panStartY);
+    clampPan();
+    applyTransform();
+    return;
+  }
+
   const rect = uploadZone.getBoundingClientRect();
-  const imgRect = displayImg.getBoundingClientRect();
-
-  // Position relative to image
-  const mx = e.clientX - imgRect.left;
-  const my = e.clientY - imgRect.top;
-
-  if (mx < 0 || my < 0 || mx > imgRect.width || my > imgRect.height) {
+  const coords = clientToCanvasPixel(e.clientX, e.clientY);
+  if (!coords) {
     crosshair.style.display = 'none';
     sampleSwatch.style.display = 'none';
     return;
   }
 
-  // Map to canvas coords
-  const scaleX = canvasEl.width / imgRect.width;
-  const scaleY = canvasEl.height / imgRect.height;
-  const px = Math.floor(mx * scaleX);
-  const py = Math.floor(my * scaleY);
-
-  const pixel = ctx.getImageData(px, py, 1, 1).data;
+  const pixel = ctx.getImageData(coords.px, coords.py, 1, 1).data;
   const r = pixel[0], g = pixel[1], b = pixel[2];
 
-  // Position crosshair (relative to upload-zone)
   const zx = e.clientX - rect.left;
   const zy = e.clientY - rect.top;
-
   crosshair.style.display = 'block';
   crosshair.style.left = zx + 'px';
   crosshair.style.top = zy + 'px';
-
-  // Sample swatch offset (avoid going off-screen)
   sampleSwatch.style.display = 'block';
   sampleSwatch.style.background = `rgb(${r},${g},${b})`;
   sampleSwatch.style.left = zx + 'px';
   sampleSwatch.style.top = zy + 'px';
-
   updatePanel(r, g, b);
 });
 
+uploadZone.addEventListener('mousedown', e => {
+  if (panMode && zoom > 1 && uploadZone.classList.contains('has-image')) {
+    isPanning = true;
+    panStartX = e.clientX; panStartY = e.clientY;
+    panStartOffsetX = panX; panStartOffsetY = panY;
+    uploadZone.style.cursor = 'grabbing';
+    e.preventDefault();
+  }
+});
+
+uploadZone.addEventListener('mouseup', () => {
+  isPanning = false;
+  updateCursor();
+});
+
 uploadZone.addEventListener('mouseleave', () => {
+  isPanning = false;
   crosshair.style.display = 'none';
   sampleSwatch.style.display = 'none';
 });
 
-// ─── TOUCH SUPPORT ────────────────────────────────────────────────────────────
+// ─── TOUCH SUPPORT (sample + pinch-to-zoom + pan) ────────────────────────────
+let lastTouchDist = null;
+let touchPanStartX = 0, touchPanStartY = 0;
+let touchPanOffsetX = 0, touchPanOffsetY = 0;
+let isTouchPanning = false;
+
+function getTouchDist(t1, t2) {
+  return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+}
+
 function handleTouch(e) {
   if (!uploadZone.classList.contains('has-image')) return;
   e.preventDefault();
+
+  // Pinch to zoom (2 fingers)
+  if (e.touches.length === 2) {
+    crosshair.style.display = 'none';
+    sampleSwatch.style.display = 'none';
+    const dist = getTouchDist(e.touches[0], e.touches[1]);
+    if (lastTouchDist !== null) {
+      const delta = (dist - lastTouchDist) / 120;
+      zoom = Math.max(1, Math.min(8, zoom + delta));
+      if (zoom === 1) { panX = 0; panY = 0; }
+      clampPan();
+      applyTransform();
+    }
+    lastTouchDist = dist;
+    isTouchPanning = false;
+    return;
+  }
+  lastTouchDist = null;
+
+  // Single finger: pan if panMode, else sample
   const touch = e.touches[0];
+  if (panMode && zoom > 1) {
+    if (e.type === 'touchstart') {
+      isTouchPanning = true;
+      touchPanStartX = touch.clientX; touchPanStartY = touch.clientY;
+      touchPanOffsetX = panX; touchPanOffsetY = panY;
+    } else if (e.type === 'touchmove' && isTouchPanning) {
+      panX = touchPanOffsetX + (touch.clientX - touchPanStartX);
+      panY = touchPanOffsetY + (touch.clientY - touchPanStartY);
+      clampPan();
+      applyTransform();
+    }
+    return;
+  }
+
+  isTouchPanning = false;
   const rect = uploadZone.getBoundingClientRect();
-  const imgRect = displayImg.getBoundingClientRect();
-  const mx = touch.clientX - imgRect.left;
-  const my = touch.clientY - imgRect.top;
-  if (mx < 0 || my < 0 || mx > imgRect.width || my > imgRect.height) return;
-  const scaleX = canvasEl.width / imgRect.width;
-  const scaleY = canvasEl.height / imgRect.height;
-  const px = Math.floor(mx * scaleX);
-  const py = Math.floor(my * scaleY);
-  const pixel = ctx.getImageData(px, py, 1, 1).data;
+  const coords = clientToCanvasPixel(touch.clientX, touch.clientY);
+  if (!coords) return;
+  const pixel = ctx.getImageData(coords.px, coords.py, 1, 1).data;
   const r = pixel[0], g = pixel[1], b = pixel[2];
   const zx = touch.clientX - rect.left;
   const zy = touch.clientY - rect.top;
@@ -1059,7 +1259,9 @@ function handleTouch(e) {
 
 uploadZone.addEventListener('touchmove', handleTouch, { passive: false });
 uploadZone.addEventListener('touchstart', handleTouch, { passive: false });
-uploadZone.addEventListener('touchend', () => {
+uploadZone.addEventListener('touchend', e => {
+  lastTouchDist = null;
+  isTouchPanning = false;
   crosshair.style.display = 'none';
   sampleSwatch.style.display = 'none';
 });
