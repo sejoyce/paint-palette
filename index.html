@@ -77,6 +77,7 @@
     }
 
     .canvas-area {
+    position: relative;
       padding: 12px;
       height: 72vw;
       min-height: 300px;
@@ -130,7 +131,53 @@
   }
   .zoom-btn:hover { background: var(--parchment); border-color: var(--warm-mid); }
   .zoom-btn.reset { color: var(--warm-mid); font-size: 0.65rem; letter-spacing: 0.06em; }
+
+  .zoom-tip {
+    display: none;
+    font-size: 0.6rem;
+    color: var(--warm-mid);
+    letter-spacing: 0.04em;
+    padding: 2px 10px 4px;
+    text-align: center;
+  }
+  .zoom-tip.visible { display: block; }
   .zoom-btn.active { background: var(--ink); color: var(--parchment); border-color: var(--ink); }
+
+  #change-photo-btn {
+    display: none;
+    position: absolute;
+    bottom: 10px;
+    right: 10px;
+    z-index: 20;
+    padding: 6px 13px;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    background: rgba(26,18,8,0.65);
+    color: #f5efe4;
+    border: 1px solid rgba(245,239,228,0.3);
+    border-radius: 3px;
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    /* Ensure taps on mobile are never intercepted by the label */
+    pointer-events: auto;
+    touch-action: manipulation;
+  }
+  #change-photo-btn:active { background: rgba(26,18,8,0.9); }
+  .zoom-btn.mode-btn {
+    min-width: 90px;
+    font-size: 0.65rem;
+    letter-spacing: 0.04em;
+    border-left: 1px solid var(--warm-mid);
+    margin-left: 4px;
+    padding-left: 10px;
+  }
+  .zoom-btn.mode-btn.active {
+    background: #2a4a2a;
+    color: #c8e8c0;
+    border-color: #4a8a4a;
+  }
 
   .zoom-level {
     font-family: 'DM Mono', monospace;
@@ -608,9 +655,10 @@
       <button class="zoom-btn" id="zoom-out-btn" onclick="adjustZoom(-0.25)">−</button>
       <span class="zoom-level" id="zoom-level">100%</span>
       <button class="zoom-btn" id="zoom-in-btn" onclick="adjustZoom(0.25)">+</button>
-      <button class="zoom-btn" id="pan-mode-btn" onclick="togglePanMode()" title="Toggle pan / sample mode" style="display:none">✥ Pan</button>
+      <button class="zoom-btn mode-btn" id="pan-mode-btn" onclick="togglePanMode()" title="Click to switch between sampling colors and panning the image">Tap: Sample ✦</button>
       <button class="zoom-btn reset" onclick="resetZoom()">Reset</button>
     </div>
+    <div class="zoom-tip" id="zoom-tip">Zoom in to pick precise pixels · switch to <strong>Pan</strong> mode to drag the image</div>
     <label for="file-input" class="upload-zone" id="upload-zone">
       <div class="upload-prompt" id="upload-prompt">
         <div class="icon">🖼</div>
@@ -621,9 +669,9 @@
       <canvas id="hidden-canvas"></canvas>
       <div class="hover-crosshair" id="crosshair"></div>
       <div class="sample-swatch" id="sample-swatch"></div>
-      <button id="change-photo-btn" style="display:none;position:absolute;bottom:10px;right:10px;z-index:10;padding:5px 11px;font-family:'DM Mono',monospace;font-size:0.65rem;background:rgba(26,18,8,0.6);color:#f5efe4;border:1px solid rgba(245,239,228,0.3);border-radius:3px;cursor:pointer;display:none;align-items:center;gap:5px;letter-spacing:0.05em;backdrop-filter:blur(4px);" onclick="event.preventDefault();fileInput.click();">⟳ Change Photo</button>
     </label>
     <input type="file" id="file-input" accept="image/*" />
+    <button id="change-photo-btn" onclick="document.getElementById('file-input').click();">⟳ Change Photo</button>
   </div>
 
   <div class="side-panel">
@@ -660,8 +708,16 @@
     <h3 id="modal-title">Edit Paint Color</h3>
     <label>Color Name</label>
     <input type="text" id="edit-name" placeholder="e.g. Titanium White" />
-    <label>Color Value</label>
-    <input type="color" id="edit-color" />
+    <label>Color — pick or enter hex code</label>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;">
+      <input type="color" id="edit-color" oninput="syncHexFromPicker()" style="flex:0 0 44px;height:44px;padding:2px;cursor:pointer;border:1px solid var(--border);border-radius:3px;" />
+      <div style="display:flex;align-items:center;flex:1;border:1px solid var(--border);border-radius:3px;background:white;overflow:hidden;">
+        <span style="padding:0 6px;font-family:'DM Mono',monospace;font-size:0.82rem;color:var(--warm-mid);border-right:1px solid var(--border);line-height:36px;height:36px;display:flex;align-items:center;">#</span>
+        <input type="text" id="edit-hex" placeholder="e.g. 3A7FBF" maxlength="6"
+          style="flex:1;font-family:'DM Mono',monospace;font-size:0.82rem;text-transform:uppercase;letter-spacing:0.08em;border:none;outline:none;padding:0 8px;height:36px;background:transparent;color:var(--ink);"
+          oninput="syncPickerFromHex()" />
+      </div>
+    </div>
     <div class="modal-btns">
       <button class="modal-delete-btn" id="delete-btn" onclick="deleteColor()" style="display:none">Delete</button>
       <button class="btn" onclick="closeModal()">Cancel</button>
@@ -680,11 +736,11 @@ let palette = [
   { name: "Perm. Alizarin Crimson", hex: "#8b1a2a", km: [[0.200,0.015],[0.920,0.008],[0.850,0.007]] },
   { name: "Cadmium Yellow",         hex: "#f5c800", km: [[0.028,0.025],[0.060,0.060],[0.980,0.012]] },
   { name: "Viridian Hue",           hex: "#3d9970", km: [[0.820,0.012],[0.120,0.045],[0.650,0.018]] },
+  { name: "Sap Green",              hex: "#4a7c3f", km: [[0.680,0.014],[0.180,0.050],[0.820,0.012]] },
   { name: "Cerulean Blue Hue",      hex: "#3a7fbf", km: [[0.680,0.020],[0.320,0.035],[0.080,0.055]] },
   { name: "French Ultramarine",     hex: "#1a2e8b", km: [[0.780,0.010],[0.680,0.012],[0.060,0.060]] },
   { name: "Burnt Sienna",           hex: "#8b4513", km: [[0.150,0.040],[0.520,0.025],[0.880,0.012]] },
   { name: "Burnt Umber",            hex: "#5c3010", km: [[0.280,0.030],[0.640,0.018],[0.920,0.010]] },
-  { name: "Sap Green",              hex: "#4a7c3f", km: [[0.680,0.014],[0.180,0.050],[0.820,0.012]] },
   { name: "Titanium White",         hex: "#f2f0e8", km: [[0.003,0.950],[0.003,0.940],[0.004,0.900]] },
 ];
 
@@ -939,6 +995,7 @@ function openModal(i) {
   document.getElementById('modal-title').textContent = 'Edit Paint Color';
   document.getElementById('edit-name').value = palette[i].name;
   document.getElementById('edit-color').value = palette[i].hex;
+  document.getElementById('edit-hex').value = palette[i].hex.replace('#','').toUpperCase();
   document.getElementById('delete-btn').style.display = palette.length > 1 ? 'block' : 'none';
   document.getElementById('modal-overlay').classList.add('open');
 }
@@ -948,6 +1005,7 @@ function openAddModal() {
   document.getElementById('modal-title').textContent = 'Add Paint Color';
   document.getElementById('edit-name').value = '';
   document.getElementById('edit-color').value = '#888888';
+  document.getElementById('edit-hex').value = '888888';
   document.getElementById('delete-btn').style.display = 'none';
   document.getElementById('modal-overlay').classList.add('open');
 }
@@ -971,6 +1029,18 @@ function kmFromHex(hex) {
     const K = ks * S;
     return [K, S];
   });
+}
+
+function syncHexFromPicker() {
+  const hex = document.getElementById('edit-color').value.replace('#','').toUpperCase();
+  document.getElementById('edit-hex').value = hex;
+}
+function syncPickerFromHex() {
+  const raw = document.getElementById('edit-hex').value.trim();
+  const hex = raw.startsWith('#') ? raw : '#' + raw;
+  if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+    document.getElementById('edit-color').value = hex;
+  }
 }
 
 function saveColor() {
@@ -1022,16 +1092,81 @@ fileInput.addEventListener('change', () => {
   if (fileInput.files[0]) loadImage(fileInput.files[0]);
 });
 
+// Read EXIF orientation tag from a file's ArrayBuffer
+function getExifOrientation(buffer) {
+  const view = new DataView(buffer);
+  if (view.getUint16(0, false) !== 0xFFD8) return 1; // not JPEG
+  let offset = 2;
+  while (offset < view.byteLength) {
+    if (view.getUint16(offset, false) === 0xFFE1) {
+      offset += 4;
+      if (view.getUint32(offset, false) !== 0x45786966) return 1; // no Exif
+      const little = view.getUint16(offset += 6, false) === 0x4949;
+      offset += view.getUint32(offset + 4, little);
+      const tags = view.getUint16(offset, little);
+      for (let i = 0; i < tags; i++) {
+        if (view.getUint16(offset + 2 + i*12, little) === 0x0112)
+          return view.getUint16(offset + 2 + i*12 + 8, little);
+      }
+    } else if ((view.getUint16(offset, false) & 0xFF00) !== 0xFF00) break;
+    else offset += 2 + view.getUint16(offset + 2, false);
+  }
+  return 1;
+}
+
 function loadImage(file) {
   const reader = new FileReader();
   reader.onload = (e) => {
     const url = e.target.result;
     const img = new Image();
     img.onload = () => {
-      canvasEl.width = img.naturalWidth;
-      canvasEl.height = img.naturalHeight;
+      // Read EXIF orientation from raw bytes to handle portrait photos correctly
+      const ab = e.target.result;
+      let orientation = 1;
+      try {
+        const bytes = typeof ab === 'string'
+          ? (() => { // dataURL path: decode base64 portion
+              const b64 = ab.split(',')[1];
+              const bin = atob(b64.substring(0, Math.min(b64.length, 1024)));
+              const buf = new ArrayBuffer(bin.length);
+              const u8 = new Uint8Array(buf);
+              for (let i=0; i<bin.length; i++) u8[i] = bin.charCodeAt(i);
+              return buf;
+            })()
+          : ab;
+        orientation = getExifOrientation(bytes);
+      } catch(_) {}
+
+      // Determine actual pixel dimensions after rotation
+      const swap = orientation >= 5; // rotated 90 or 270
+      const w = swap ? img.naturalHeight : img.naturalWidth;
+      const h = swap ? img.naturalWidth  : img.naturalHeight;
+      canvasEl.width  = w;
+      canvasEl.height = h;
+
+      // Apply rotation transform to canvas context before drawing
+      ctx.save();
+      switch (orientation) {
+        case 2: ctx.transform(-1,0,0,1,w,0); break;
+        case 3: ctx.transform(-1,0,0,-1,w,h); break;
+        case 4: ctx.transform(1,0,0,-1,0,h); break;
+        case 5: ctx.transform(0,1,1,0,0,0); break;
+        case 6: ctx.transform(0,1,-1,0,h,0); break;
+        case 7: ctx.transform(0,-1,-1,0,w,0); break;
+        case 8: ctx.transform(0,-1,1,0,0,w); break;
+        default: break;
+      }
       ctx.drawImage(img, 0, 0);
+      ctx.restore();
+
+      // For display, use CSS to rotate the img element to match
+      const rotateDeg = {5:90,6:90,7:270,8:270,3:180,2:0,4:0}[orientation] || 0;
+      displayImg.style.transform = '';
+      // Use object-fit so the image fills the zone regardless of orientation
       displayImg.src = url;
+      // If we need a CSS rotation hint for display (modern browsers auto-orient; this is a fallback)
+      displayImg.style.imageOrientation = 'from-image';
+
       displayImg.style.display = 'block';
       document.getElementById('upload-prompt').style.display = 'none';
       uploadZone.classList.add('has-image');
@@ -1044,6 +1179,7 @@ function loadImage(file) {
       const btn = document.getElementById('change-photo-btn');
       btn.style.display = 'flex';
       document.getElementById('zoom-toolbar').classList.add('visible');
+      document.getElementById('zoom-tip').classList.add('visible');
       updatePanBtn();
       resetZoom();
     };
@@ -1109,18 +1245,17 @@ function updateCursor() {
 function updatePanBtn() {
   const btn = document.getElementById('pan-mode-btn');
   if (!btn) return;
-  // Always show once an image is loaded (toolbar is visible)
   btn.style.display = 'inline-block';
   btn.classList.toggle('active', panMode);
-  // Grey out at 1× zoom since panning has no effect there
-  btn.style.opacity = zoom <= 1 ? '0.45' : '1';
-  btn.style.pointerEvents = zoom <= 1 ? 'none' : 'auto';
+  // Always fully interactive — switching to pan mode at zoom 1 is harmless
+  btn.style.opacity = '1';
+  btn.style.pointerEvents = 'auto';
   if (panMode) {
-    btn.textContent = '✥ Pan mode';
-    btn.title = 'Currently panning — click to switch to Sample mode (pick colors)';
+    btn.textContent = 'Drag: Pan ✥';
+    btn.title = 'Pan mode — drag/swipe to move image. Click to switch back to Sample mode.';
   } else {
-    btn.textContent = '✦ Sample mode';
-    btn.title = 'Currently sampling colors — zoom in, then click to switch to Pan mode (drag image to reposition)';
+    btn.textContent = 'Tap: Sample ✦';
+    btn.title = 'Sample mode — tap/click to read a color. Zoom in first, then switch to Pan mode to reposition the image.';
   }
 }
 
