@@ -106,6 +106,7 @@
     flex-direction: column;
     gap: 10px;
     overflow: hidden;
+    position: relative;
   }
 
   .zoom-toolbar {
@@ -148,6 +149,7 @@
     position: absolute;
     bottom: 10px;
     right: 10px;
+    /* Positioned relative to .upload-zone, not .canvas-area */
     z-index: 20;
     padding: 6px 13px;
     font-family: 'DM Mono', monospace;
@@ -160,7 +162,6 @@
     letter-spacing: 0.05em;
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
-    /* Ensure taps on mobile are never intercepted by the label */
     pointer-events: auto;
     touch-action: manipulation;
   }
@@ -652,13 +653,13 @@
 <div class="layout">
   <div class="canvas-area">
     <div class="zoom-toolbar" id="zoom-toolbar">
-      <button class="zoom-btn" id="zoom-out-btn" onclick="adjustZoom(-0.25)">−</button>
+      <button class="zoom-btn" id="zoom-out-btn" onclick="adjustZoom(-0.25)" title="Zoom out">−</button>
       <span class="zoom-level" id="zoom-level">100%</span>
-      <button class="zoom-btn" id="zoom-in-btn" onclick="adjustZoom(0.25)">+</button>
-      <button class="zoom-btn mode-btn" id="pan-mode-btn" onclick="togglePanMode()" title="Click to switch between sampling colors and panning the image">Tap: Sample ✦</button>
-      <button class="zoom-btn reset" onclick="resetZoom()">Reset</button>
+      <button class="zoom-btn" id="zoom-in-btn" onclick="adjustZoom(0.25)" title="Zoom in">+</button>
+      <span class="zoom-sep"></span>
+      <button class="zoom-btn mode-btn" id="sample-mode-btn" onclick="setSampleMode()" title="Tap or click image to read a pixel color">✦ Sample</button>
+      <button class="zoom-btn mode-btn" id="pan-mode-btn" onclick="setPanMode()" title="Drag or swipe to pan the image (useful when zoomed in)">✥ Pan</button>
     </div>
-    <div class="zoom-tip" id="zoom-tip">Zoom in to pick precise pixels · switch to <strong>Pan</strong> mode to drag the image</div>
     <label for="file-input" class="upload-zone" id="upload-zone">
       <div class="upload-prompt" id="upload-prompt">
         <div class="icon">🖼</div>
@@ -671,7 +672,7 @@
       <div class="sample-swatch" id="sample-swatch"></div>
     </label>
     <input type="file" id="file-input" accept="image/*" />
-    <button id="change-photo-btn" onclick="document.getElementById('file-input').click();">⟳ Change Photo</button>
+    <button id="change-photo-btn" onclick="document.getElementById('file-input').click(); event.stopPropagation();">⟳ Change Photo</button>
   </div>
 
   <div class="side-panel">
