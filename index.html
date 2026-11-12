@@ -106,7 +106,6 @@
     flex-direction: column;
     gap: 10px;
     overflow: hidden;
-    position: relative;
   }
 
   .zoom-toolbar {
@@ -133,15 +132,6 @@
   .zoom-btn:hover { background: var(--parchment); border-color: var(--warm-mid); }
   .zoom-btn.reset { color: var(--warm-mid); font-size: 0.65rem; letter-spacing: 0.06em; }
 
-  .zoom-tip {
-    display: none;
-    font-size: 0.6rem;
-    color: var(--warm-mid);
-    letter-spacing: 0.04em;
-    padding: 2px 10px 4px;
-    text-align: center;
-  }
-  .zoom-tip.visible { display: block; }
   .zoom-btn.active { background: var(--ink); color: var(--parchment); border-color: var(--ink); }
 
   #change-photo-btn {
@@ -149,7 +139,7 @@
     position: absolute;
     bottom: 10px;
     right: 10px;
-    /* Positioned relative to .upload-zone, not .canvas-area */
+    /* Positioned relative to .upload-zone (position:relative) */
     z-index: 20;
     padding: 6px 13px;
     font-family: 'DM Mono', monospace;
@@ -167,17 +157,22 @@
   }
   #change-photo-btn:active { background: rgba(26,18,8,0.9); }
   .zoom-btn.mode-btn {
-    min-width: 90px;
-    font-size: 0.65rem;
-    letter-spacing: 0.04em;
-    border-left: 1px solid var(--warm-mid);
-    margin-left: 4px;
-    padding-left: 10px;
+    min-width: 76px;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
   }
   .zoom-btn.mode-btn.active {
-    background: #2a4a2a;
-    color: #c8e8c0;
-    border-color: #4a8a4a;
+    background: var(--ink);
+    color: var(--parchment);
+    border-color: var(--ink);
+  }
+
+  .zoom-sep {
+    width: 1px;
+    height: 18px;
+    background: var(--border);
+    margin: 0 2px;
+    flex-shrink: 0;
   }
 
   .zoom-level {
@@ -670,9 +665,9 @@
       <canvas id="hidden-canvas"></canvas>
       <div class="hover-crosshair" id="crosshair"></div>
       <div class="sample-swatch" id="sample-swatch"></div>
+      <button id="change-photo-btn" onclick="document.getElementById('file-input').click(); event.stopPropagation();">⟳ Change Photo</button>
     </label>
     <input type="file" id="file-input" accept="image/*" />
-    <button id="change-photo-btn" onclick="document.getElementById('file-input').click(); event.stopPropagation();">⟳ Change Photo</button>
   </div>
 
   <div class="side-panel">
@@ -710,12 +705,12 @@
     <label>Color Name</label>
     <input type="text" id="edit-name" placeholder="e.g. Titanium White" />
     <label>Color — pick or enter hex code</label>
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;">
-      <input type="color" id="edit-color" oninput="syncHexFromPicker()" style="flex:0 0 44px;height:44px;padding:2px;cursor:pointer;border:1px solid var(--border);border-radius:3px;" />
-      <div style="display:flex;align-items:center;flex:1;border:1px solid var(--border);border-radius:3px;background:white;overflow:hidden;">
-        <span style="padding:0 6px;font-family:'DM Mono',monospace;font-size:0.82rem;color:var(--warm-mid);border-right:1px solid var(--border);line-height:36px;height:36px;display:flex;align-items:center;">#</span>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;height:40px;">
+      <input type="color" id="edit-color" oninput="syncHexFromPicker()" style="flex:0 0 40px;width:40px;height:40px;padding:2px;cursor:pointer;border:1px solid var(--border);border-radius:3px;align-self:center;" />
+      <div style="display:flex;align-items:center;flex:1;height:40px;border:1px solid var(--border);border-radius:3px;background:white;overflow:hidden;">
+        <span style="padding:0 8px;font-family:'DM Mono',monospace;font-size:0.82rem;color:var(--warm-mid);border-right:1px solid var(--border);height:100%;display:flex;align-items:center;">#</span>
         <input type="text" id="edit-hex" placeholder="e.g. 3A7FBF" maxlength="6"
-          style="flex:1;font-family:'DM Mono',monospace;font-size:0.82rem;text-transform:uppercase;letter-spacing:0.08em;border:none;outline:none;padding:0 8px;height:36px;background:transparent;color:var(--ink);"
+          style="flex:1;font-family:'DM Mono',monospace;font-size:0.82rem;text-transform:uppercase;letter-spacing:0.08em;border:none;outline:none;padding:0 8px;height:100%;background:transparent;color:var(--ink);"
           oninput="syncPickerFromHex()" />
       </div>
     </div>
@@ -1180,8 +1175,7 @@ function loadImage(file) {
       const btn = document.getElementById('change-photo-btn');
       btn.style.display = 'flex';
       document.getElementById('zoom-toolbar').classList.add('visible');
-      document.getElementById('zoom-tip').classList.add('visible');
-      updatePanBtn();
+      updateModeButtons();
       resetZoom();
     };
     img.src = url;
@@ -1229,13 +1223,19 @@ function resetZoom() {
   zoom = 1; panX = 0; panY = 0; panMode = false;
   applyTransform();
   updateCursor();
-  updatePanBtn();
+  updateModeButtons();
 }
 
-function togglePanMode() {
-  panMode = !panMode;
+function setSampleMode() {
+  panMode = false;
   updateCursor();
-  updatePanBtn();
+  updateModeButtons();
+}
+
+function setPanMode() {
+  panMode = true;
+  updateCursor();
+  updateModeButtons();
 }
 
 function updateCursor() {
@@ -1243,22 +1243,16 @@ function updateCursor() {
   uploadZone.style.cursor = panMode ? 'grab' : 'crosshair';
 }
 
-function updatePanBtn() {
-  const btn = document.getElementById('pan-mode-btn');
-  if (!btn) return;
-  btn.style.display = 'inline-block';
-  btn.classList.toggle('active', panMode);
-  // Always fully interactive — switching to pan mode at zoom 1 is harmless
-  btn.style.opacity = '1';
-  btn.style.pointerEvents = 'auto';
-  if (panMode) {
-    btn.textContent = 'Drag: Pan ✥';
-    btn.title = 'Pan mode — drag/swipe to move image. Click to switch back to Sample mode.';
-  } else {
-    btn.textContent = 'Tap: Sample ✦';
-    btn.title = 'Sample mode — tap/click to read a color. Zoom in first, then switch to Pan mode to reposition the image.';
-  }
+function updateModeButtons() {
+  const sampleBtn = document.getElementById('sample-mode-btn');
+  const panBtn = document.getElementById('pan-mode-btn');
+  if (!sampleBtn || !panBtn) return;
+  sampleBtn.classList.toggle('active', !panMode);
+  panBtn.classList.toggle('active', panMode);
 }
+
+// Keep for backwards compat (called from adjustZoom / resetZoom)
+function updatePanBtn() { updateModeButtons(); }
 
 // Scroll wheel zoom
 uploadZone.addEventListener('wheel', e => {
