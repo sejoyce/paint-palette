@@ -156,25 +156,6 @@
     touch-action: manipulation;
   }
   #change-photo-btn:active { background: rgba(26,18,8,0.9); }
-  .zoom-btn.mode-btn {
-    min-width: 76px;
-    font-size: 0.72rem;
-    letter-spacing: 0.03em;
-  }
-  .zoom-btn.mode-btn.active {
-    background: var(--ink);
-    color: var(--parchment);
-    border-color: var(--ink);
-  }
-
-  .zoom-sep {
-    width: 1px;
-    height: 18px;
-    background: var(--border);
-    margin: 0 2px;
-    flex-shrink: 0;
-  }
-
   .zoom-level {
     font-family: 'DM Mono', monospace;
     font-size: 0.68rem;
@@ -651,9 +632,6 @@
       <button class="zoom-btn" id="zoom-out-btn" onclick="adjustZoom(-0.25)" title="Zoom out">−</button>
       <span class="zoom-level" id="zoom-level">100%</span>
       <button class="zoom-btn" id="zoom-in-btn" onclick="adjustZoom(0.25)" title="Zoom in">+</button>
-      <span class="zoom-sep"></span>
-      <button class="zoom-btn mode-btn" id="sample-mode-btn" onclick="setSampleMode()" title="Tap or click image to read a pixel color">✦ Sample</button>
-      <button class="zoom-btn mode-btn" id="pan-mode-btn" onclick="setPanMode()" title="Drag or swipe to pan the image (useful when zoomed in)">✥ Pan</button>
     </div>
     <label for="file-input" class="upload-zone" id="upload-zone">
       <div class="upload-prompt" id="upload-prompt">
@@ -1175,7 +1153,6 @@ function loadImage(file) {
       const btn = document.getElementById('change-photo-btn');
       btn.style.display = 'flex';
       document.getElementById('zoom-toolbar').classList.add('visible');
-      updateModeButtons();
       resetZoom();
     };
     img.src = url;
@@ -1189,7 +1166,6 @@ let panX = 0, panY = 0;
 let isPanning = false;
 let panStartX = 0, panStartY = 0;
 let panStartOffsetX = 0, panStartOffsetY = 0;
-let panMode = false; // when true: drag pans; when false: drag/tap samples
 
 function applyTransform() {
   displayImg.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
@@ -1212,47 +1188,23 @@ function clampPan() {
 
 function adjustZoom(delta) {
   zoom = Math.max(1, Math.min(8, zoom + delta));
-  if (zoom === 1) { panX = 0; panY = 0; panMode = false; }
+  if (zoom === 1) { panX = 0; panY = 0; }
   clampPan();
   applyTransform();
   updateCursor();
-  updatePanBtn();
 }
 
 function resetZoom() {
-  zoom = 1; panX = 0; panY = 0; panMode = false;
+  zoom = 1; panX = 0; panY = 0;
   applyTransform();
   updateCursor();
-  updateModeButtons();
-}
-
-function setSampleMode() {
-  panMode = false;
-  updateCursor();
-  updateModeButtons();
-}
-
-function setPanMode() {
-  panMode = true;
-  updateCursor();
-  updateModeButtons();
 }
 
 function updateCursor() {
-  if (zoom <= 1) { uploadZone.style.cursor = 'crosshair'; return; }
-  uploadZone.style.cursor = panMode ? 'grab' : 'crosshair';
+  uploadZone.style.cursor = zoom > 1 ? 'grab' : 'crosshair';
 }
 
-function updateModeButtons() {
-  const sampleBtn = document.getElementById('sample-mode-btn');
-  const panBtn = document.getElementById('pan-mode-btn');
-  if (!sampleBtn || !panBtn) return;
-  sampleBtn.classList.toggle('active', !panMode);
-  panBtn.classList.toggle('active', panMode);
-}
-
-// Keep for backwards compat (called from adjustZoom / resetZoom)
-function updatePanBtn() { updateModeButtons(); }
+function updatePanBtn() {} // no-op, kept for compat
 
 // Scroll wheel zoom
 uploadZone.addEventListener('wheel', e => {
@@ -1276,19 +1228,40 @@ function clientToCanvasPixel(clientX, clientY) {
   return { px: Math.floor(mx * scaleX), py: Math.floor(my * scaleY) };
 }
 
-// ─── HOVER SAMPLING ───────────────────────────────────────────────────────────
+
+// ─── HOVER SAMPLING + PANNING ───────────────────────────────────────────────
+// Drag threshold in pixels — movement under this counts as a click/sample
+const DRAG_THRESHOLD = 5;
+let mouseDownX = 0, mouseDownY = 0;
+
+uploadZone.addEventListener('mousedown', e => {
+  if (!uploadZone.classList.contains('has-image')) return;
+  // Block label from opening file picker; Change Photo button does it directly.
+  e.preventDefault();
+  mouseDownX = e.clientX; mouseDownY = e.clientY;
+  panStartX = e.clientX; panStartY = e.clientY;
+  panStartOffsetX = panX; panStartOffsetY = panY;
+  isPanning = false; // decided on first move
+});
+
 uploadZone.addEventListener('mousemove', e => {
   if (!uploadZone.classList.contains('has-image')) return;
-
-  // Panning
-  if (isPanning && panMode && zoom > 1) {
+  const dx = e.clientX - mouseDownX, dy = e.clientY - mouseDownY;
+  if (e.buttons === 1 && Math.hypot(dx, dy) > DRAG_THRESHOLD && zoom > 1) {
+    // Start / continue panning
+    if (!isPanning) {
+      isPanning = true;
+      uploadZone.style.cursor = 'grabbing';
+    }
     panX = panStartOffsetX + (e.clientX - panStartX);
     panY = panStartOffsetY + (e.clientY - panStartY);
     clampPan();
     applyTransform();
     return;
   }
+  if (isPanning) return; // dragging but cursor still moving — don't sample mid-drag
 
+  // Hover sampling
   const rect = uploadZone.getBoundingClientRect();
   const coords = clientToCanvasPixel(e.clientX, e.clientY);
   if (!coords) {
@@ -1296,10 +1269,8 @@ uploadZone.addEventListener('mousemove', e => {
     sampleSwatch.style.display = 'none';
     return;
   }
-
   const pixel = ctx.getImageData(coords.px, coords.py, 1, 1).data;
   const r = pixel[0], g = pixel[1], b = pixel[2];
-
   const zx = e.clientX - rect.left;
   const zy = e.clientY - rect.top;
   crosshair.style.display = 'block';
@@ -1312,22 +1283,18 @@ uploadZone.addEventListener('mousemove', e => {
   updatePanel(r, g, b);
 });
 
-uploadZone.addEventListener('mousedown', e => {
-  if (!uploadZone.classList.contains('has-image')) return;
-  // Always prevent the label from opening the file picker when an image is loaded;
-  // the Change Photo button handles that explicitly via fileInput.click().
-  e.preventDefault();
-  if (panMode && zoom > 1) {
-    isPanning = true;
-    panStartX = e.clientX; panStartY = e.clientY;
-    panStartOffsetX = panX; panStartOffsetY = panY;
-    uploadZone.style.cursor = 'grabbing';
-  }
-});
-
-uploadZone.addEventListener('mouseup', () => {
+uploadZone.addEventListener('mouseup', e => {
+  const wasPanning = isPanning;
   isPanning = false;
   updateCursor();
+  // If the mouse barely moved, treat it as a click → sample that pixel
+  if (!wasPanning && uploadZone.classList.contains('has-image')) {
+    const coords = clientToCanvasPixel(e.clientX, e.clientY);
+    if (coords) {
+      const pixel = ctx.getImageData(coords.px, coords.py, 1, 1).data;
+      updatePanel(pixel[0], pixel[1], pixel[2]);
+    }
+  }
 });
 
 // Once an image is loaded, block any click on the label so it can't reopen the file picker.
@@ -1374,38 +1341,50 @@ function handleTouch(e) {
   }
   lastTouchDist = null;
 
-  // Single finger: pan if panMode, else sample
+  // Single finger: drag pans (when zoomed), tap-in-place samples
   const touch = e.touches[0];
-  if (panMode && zoom > 1) {
-    if (e.type === 'touchstart') {
+  if (e.type === 'touchstart') {
+    isTouchPanning = false;
+    touchPanStartX = touch.clientX; touchPanStartY = touch.clientY;
+    touchPanOffsetX = panX; touchPanOffsetY = panY;
+    return;
+  }
+
+  if (e.type === 'touchmove') {
+    const dx = touch.clientX - touchPanStartX;
+    const dy = touch.clientY - touchPanStartY;
+    if (zoom > 1 && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
       isTouchPanning = true;
-      touchPanStartX = touch.clientX; touchPanStartY = touch.clientY;
-      touchPanOffsetX = panX; touchPanOffsetY = panY;
-    } else if (e.type === 'touchmove' && isTouchPanning) {
-      panX = touchPanOffsetX + (touch.clientX - touchPanStartX);
-      panY = touchPanOffsetY + (touch.clientY - touchPanStartY);
+      panX = touchPanOffsetX + dx;
+      panY = touchPanOffsetY + dy;
       clampPan();
       applyTransform();
     }
     return;
   }
 
-  isTouchPanning = false;
-  const rect = uploadZone.getBoundingClientRect();
-  const coords = clientToCanvasPixel(touch.clientX, touch.clientY);
-  if (!coords) return;
-  const pixel = ctx.getImageData(coords.px, coords.py, 1, 1).data;
-  const r = pixel[0], g = pixel[1], b = pixel[2];
-  const zx = touch.clientX - rect.left;
-  const zy = touch.clientY - rect.top;
-  crosshair.style.display = 'block';
-  crosshair.style.left = zx + 'px';
-  crosshair.style.top = zy + 'px';
-  sampleSwatch.style.display = 'block';
-  sampleSwatch.style.background = `rgb(${r},${g},${b})`;
-  sampleSwatch.style.left = zx + 'px';
-  sampleSwatch.style.top = zy + 'px';
-  updatePanel(r, g, b);
+  // touchend — only sample if it was a tap (not a pan)
+  if (e.type === 'touchend') {
+    if (isTouchPanning) { isTouchPanning = false; return; }
+    // Use changedTouches for touchend
+    const t = e.changedTouches[0];
+    const rect = uploadZone.getBoundingClientRect();
+    const coords = clientToCanvasPixel(t.clientX, t.clientY);
+    if (!coords) return;
+    const pixel = ctx.getImageData(coords.px, coords.py, 1, 1).data;
+    const r = pixel[0], g = pixel[1], b = pixel[2];
+    const zx = t.clientX - rect.left;
+    const zy = t.clientY - rect.top;
+    crosshair.style.display = 'block';
+    crosshair.style.left = zx + 'px';
+    crosshair.style.top = zy + 'px';
+    sampleSwatch.style.display = 'block';
+    sampleSwatch.style.background = `rgb(${r},${g},${b})`;
+    sampleSwatch.style.left = zx + 'px';
+    sampleSwatch.style.top = zy + 'px';
+    updatePanel(r, g, b);
+    return;
+  }
 }
 
 uploadZone.addEventListener('touchmove', handleTouch, { passive: false });
